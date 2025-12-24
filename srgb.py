@@ -227,6 +227,12 @@ def parse_args():
         help="Number of spatial components",
     )
     parser.add_argument(
+        "--transform",
+        type=str,
+        choices=["sqrt", "log1p"],
+        help="Counts transform",
+    )
+    parser.add_argument(
         "--plot",
         action="store_true",
         help="Plot spatial gene basis",
@@ -238,7 +244,7 @@ if __name__ == "__main__":
     args = parse_args()
     adata = sq.read.visium(args.input)
     adata.var_names_make_unique()
-    X, coords, gene_names = extract_visium_data(adata, transform="sqrt")
+    X, coords, gene_names = extract_visium_data(adata, transform=args.transform)
 
     W = normalise_gene_weights(X)
     K = gaussian_kernel(coords, args.sigma)
