@@ -1,3 +1,4 @@
+import argparse
 import numpy as np
 import scanpy as sc
 import squidpy as sq
@@ -181,7 +182,7 @@ def top_genes_per_basis(Z, genes, n_top):
 def print_top_genes_per_basis(Z, genes, n_top=8):
     """Print top genes for each gene basis"""
     top_genes = top_genes_per_basis(Z, genes, n_top)
-    for k in range(spatial_components):
+    for k in range(Z.shape[1]):
         print(f"\nBasis {k}")
         for g, w in top_genes[k].items():
             print(f"{g:15s} {w:+.3f}")
@@ -198,21 +199,57 @@ def plot_spatial_basis(adata, phi, prefix="spatial_basis"):
     plt.show()
 
 
-if __name__ == "__main__":
-    sigma = 150.0
-    spatial_components = 8
+def parse_args():
+    parser = argparse.ArgumentParser(description="Spatial RKHS Gene Basis")
+    parser.add_argument(
+        "-i",
+        "--input",
+        type=str,
+        required=True,
+        help="Visium data path",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=str,
+        help="Save .h5ad-formatted hdf5 file",
+    )
+    parser.add_argument(
+        "-s",
+        "--sigma",
+        type=float,
+        help="Standard deviation of Gaussian kernel",
+    )
+    parser.add_argument(
+        "--components",
+        type=int,
+        default=8,
+        help="Number of spatial components",
+    )
+    parser.add_argument(
+        "--plot",
+        action="store_true",
+        help="Plot spatial gene basis",
+    )
+    return parser.parse_args()
 
-    adata = sq.datasets.visium_hne_adata()
+
+if __name__ == "__main__":
+    args = parse_args()
+    adata = sq.read.visium(args.input)
+    adata.var_names_make_unique()
     X, coords, gene_names = extract_visium_data(adata, transform="sqrt")
 
     W = normalise_gene_weights(X)
-    K = gaussian_kernel(coords, sigma)
+    K = gaussian_kernel(coords, args.sigma)
     S = cs_kernel(W, K)
-    Z, eigvals, eigvecs = gene_kpca(S, spatial_components)
+    Z, eigvals, eigvecs = gene_kpca(S, args.components)
     # eigvals, eigvecs = kernel_pca(C, spatial_components)
     # Z = eigvecs * np.sqrt(eigvals)
     phi = project_spatial_basis(X, eigvecs)
     phi = orthogonalize_spatial_basis(phi, K)
+
+    print_top_genes_per_basis(Z, gene_names)
 
     adata.uns["spatial_basis_genes"] = gene_names
     adata.obsp["spatial_kernel"] = K
@@ -221,5 +258,7 @@ if __name__ == "__main__":
     adata.uns["spatial_gene_eigvals"] = eigvals
     adata.uns["spatial_gene_scores"] = Z
 
-    print_top_genes_per_basis(Z, gene_names)
-    plot_spatial_basis(adata, phi)
+    if args.output:
+        adata.write(args.output)
+    if args.plot:
+        plot_spatial_basis(adata, phi)
