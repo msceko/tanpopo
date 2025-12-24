@@ -1,0 +1,37 @@
+import numpy as np
+import squidpy as sq
+import matplotlib.pyplot as plt
+
+
+def normalise_gene_weights(X):
+    """Normalise columns to sum to 1"""
+    return X / X.sum(axis=0, keepdims=True)
+
+
+def top_genes_per_basis(Z, genes, n_top):
+    """Compute top genes for each gene basis"""
+    top_genes = []
+    for k in range(Z.shape[1]):
+        idx = np.argsort(np.abs(Z[:, k]))[::-1][:n_top]
+        top_genes.append({genes[i]: Z[i, k] for i in idx})
+    return top_genes
+
+
+def print_top_genes_per_basis(Z, genes, n_top=8):
+    """Print top genes for each gene basis"""
+    top_genes = top_genes_per_basis(Z, genes, n_top)
+    for k in range(Z.shape[1]):
+        print(f"\nBasis {k}")
+        for g, w in top_genes[k].items():
+            print(f"{g:15s} {w:+.3f}")
+
+
+def plot_spatial_basis(adata, phi, prefix="spatial_basis"):
+    """Plot spatial gene basis"""
+    keys = []
+    for k in range(phi.shape[1]):
+        keys.append(f"{prefix}_{k}")
+        adata.obs[keys[k]] = phi[:, k]
+
+    sq.pl.spatial_scatter(adata, color=keys)
+    plt.show()
