@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.linalg import eigh
 from sklearn.decomposition import KernelPCA
 
 

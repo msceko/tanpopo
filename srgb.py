@@ -49,16 +49,15 @@ def parse_args():
     return parser.parse_args()
 
 
-if __name__ == "__main__":
-    args = parse_args()
-    adata = sq.read.visium(args.input)
+def spatial_rkhs_gene_basis(fname, output, sigma, n_components, transform, plot):
+    adata = sq.read.visium(fname)
     adata.var_names_make_unique()
-    X, coords, gene_names = extract_visium_data(adata, transform=args.transform)
+    X, coords, gene_names = extract_visium_data(adata, transform=transform)
 
     W = normalise_gene_weights(X)
-    K = gaussian_kernel(coords, args.sigma)
+    K = gaussian_kernel(coords, sigma)
     S = cs_kernel(W, K)
-    Z, eigvals, eigvecs = gene_kpca(S, args.components)
+    Z, eigvals, eigvecs = gene_kpca(S, n_components)
     # eigvals, eigvecs = kernel_pca(C, spatial_components)
     # Z = eigvecs * np.sqrt(eigvals)
     phi = project_spatial_basis(X, eigvecs)
@@ -73,7 +72,14 @@ if __name__ == "__main__":
     adata.uns["spatial_gene_eigvals"] = eigvals
     adata.uns["spatial_gene_scores"] = Z
 
-    if args.output:
-        adata.write(args.output)
-    if args.plot:
+    if output:
+        adata.write(output)
+    if plot:
         plot_spatial_basis(adata, phi)
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    spatial_rkhs_gene_basis(
+        args.input, args.output, args.sigma, args.components, args.transform, args.plot
+    )
