@@ -5,7 +5,7 @@ from data import extract_visium_data
 from kernel import gaussian_kernel, knn_gaussian_kernel, cs_kernel
 from kpca import gene_kpca
 from basis import project_spatial_basis, orthogonalize_spatial_basis
-from utils import normalise_gene_weights, print_top_genes_per_basis, plot_spatial_basis
+from utils import timed, normalise_gene_weights, print_top_genes_per_basis, plot_spatial_basis
 
 
 def parse_args():
@@ -51,29 +51,42 @@ def parse_args():
         action="store_true",
         help="Plot spatial gene basis",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Time and print each step.",
+    )
     return parser.parse_args()
 
 
-def spatial_rkhs_gene_basis(fname, output, sigma, n_components, n_neighbours, transform, plot):
-    adata = sq.read.visium(fname)
-    adata.var_names_make_unique()
-    use_sparse = bool(n_neighbours)
-    X, coords, gene_names = extract_visium_data(adata, transform=transform, sparse=use_sparse)
+def spatial_rkhs_gene_basis(
+    fname, output, sigma, n_components, n_neighbours, transform, plot, verbose=False
+):
+    with timed("Loading data", verbose):
+        adata = sq.read.visium(fname)
+        adata.var_names_make_unique()
+        use_sparse = bool(n_neighbours)
+        X, coords, gene_names = extract_visium_data(adata, transform=transform, sparse=use_sparse)
 
-    W = normalise_gene_weights(X)
-    K = (
-        knn_gaussian_kernel(coords, sigma, n_neighbours)
-        if use_sparse
-        else gaussian_kernel(coords, sigma)
-    )
-    S = cs_kernel(W, K)
-    Z, eigvals, eigvecs = gene_kpca(S, n_components)
-    # eigvals, eigvecs = kernel_pca(C, spatial_components)
-    # Z = eigvecs * np.sqrt(eigvals)
-    phi = project_spatial_basis(X, eigvecs)
-    phi = orthogonalize_spatial_basis(phi, K)
+    with timed("Computing kernel matrix", verbose):
+        W = normalise_gene_weights(X)
+        K = (
+            knn_gaussian_kernel(coords, sigma, n_neighbours)
+            if use_sparse
+            else gaussian_kernel(coords, sigma)
+        )
+        S = cs_kernel(W, K)
 
-    print_top_genes_per_basis(Z, gene_names)
+    with timed("Kernel PCA", verbose):
+        Z, eigvals, eigvecs = gene_kpca(S, n_components)
+        # eigvals, eigvecs = kernel_pca(C, spatial_components)
+        # Z = eigvecs * np.sqrt(eigvals)
+
+        phi = project_spatial_basis(X, eigvecs)
+        phi = orthogonalize_spatial_basis(phi, K)
+
+    if verbose:
+        print_top_genes_per_basis(Z, gene_names)
 
     adata.uns["spatial_basis_genes"] = gene_names
     adata.obsp["spatial_kernel"] = K
@@ -91,5 +104,12 @@ def spatial_rkhs_gene_basis(fname, output, sigma, n_components, n_neighbours, tr
 if __name__ == "__main__":
     args = parse_args()
     spatial_rkhs_gene_basis(
-        args.input, args.output, args.sigma, args.components, args.knn, args.transform, args.plot
+        args.input,
+        args.output,
+        args.sigma,
+        args.components,
+        args.knn,
+        args.transform,
+        args.plot,
+        args.verbose,
     )

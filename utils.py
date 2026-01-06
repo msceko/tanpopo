@@ -1,7 +1,25 @@
+from contextlib import contextmanager
+from time import perf_counter
+
 import numpy as np
 import squidpy as sq
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import normalize
+
+
+@contextmanager
+def timed(label: str, enabled: bool, sink=print, unit="s"):
+    if not enabled:
+        yield
+        return
+    scale = 1000.0 if unit == "ms" else 1.0
+    sink(f"{label}", end="")
+    t0 = perf_counter()
+    try:
+        yield
+    finally:
+        dt = (perf_counter() - t0) * scale
+        sink(f": {dt:.2f} {unit}")
 
 
 def normalise_gene_weights(X):
