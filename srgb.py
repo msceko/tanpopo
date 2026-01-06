@@ -2,7 +2,7 @@ import argparse
 import squidpy as sq
 
 from data import extract_visium_data
-from kernel import gaussian_kernel, cs_kernel
+from kernel import gaussian_kernel, knn_gaussian_kernel, cs_kernel
 from kpca import gene_kpca
 from basis import project_spatial_basis, orthogonalize_spatial_basis
 from utils import normalise_gene_weights, print_top_genes_per_basis, plot_spatial_basis
@@ -36,6 +36,11 @@ def parse_args():
         help="Number of spatial components",
     )
     parser.add_argument(
+        "--knn",
+        type=int,
+        help="Number of neighbours for spatial computation",
+    )
+    parser.add_argument(
         "--transform",
         type=str,
         choices=["sqrt", "log1p"],
@@ -49,13 +54,18 @@ def parse_args():
     return parser.parse_args()
 
 
-def spatial_rkhs_gene_basis(fname, output, sigma, n_components, transform, plot):
+def spatial_rkhs_gene_basis(fname, output, sigma, n_components, n_neighbours, transform, plot):
     adata = sq.read.visium(fname)
     adata.var_names_make_unique()
-    X, coords, gene_names = extract_visium_data(adata, transform=transform)
+    use_sparse = bool(n_neighbours)
+    X, coords, gene_names = extract_visium_data(adata, transform=transform, sparse=use_sparse)
 
     W = normalise_gene_weights(X)
-    K = gaussian_kernel(coords, sigma)
+    K = (
+        knn_gaussian_kernel(coords, sigma, n_neighbours)
+        if use_sparse
+        else gaussian_kernel(coords, sigma)
+    )
     S = cs_kernel(W, K)
     Z, eigvals, eigvecs = gene_kpca(S, n_components)
     # eigvals, eigvecs = kernel_pca(C, spatial_components)
@@ -81,5 +91,5 @@ def spatial_rkhs_gene_basis(fname, output, sigma, n_components, transform, plot)
 if __name__ == "__main__":
     args = parse_args()
     spatial_rkhs_gene_basis(
-        args.input, args.output, args.sigma, args.components, args.transform, args.plot
+        args.input, args.output, args.sigma, args.components, args.knn, args.transform, args.plot
     )

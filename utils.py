@@ -1,11 +1,12 @@
 import numpy as np
 import squidpy as sq
 import matplotlib.pyplot as plt
+from sklearn.preprocessing import normalize
 
 
 def normalise_gene_weights(X):
     """Normalise columns to sum to 1"""
-    return X / X.sum(axis=0, keepdims=True)
+    return normalize(X, norm="l1", axis=0)
 
 
 def top_genes_per_basis(Z, genes, n_top):
