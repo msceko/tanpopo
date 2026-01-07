@@ -9,7 +9,7 @@ from matplotlib.image import imread
 
 
 def extract_visium_data(
-    adata, normalise=True, transform=None, layer=None, min_counts=10, sparse=False
+    adata, normalise=True, transform=None, layer=None, min_counts=10, sparse=True
 ):
     """
     Returns:

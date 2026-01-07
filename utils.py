@@ -36,11 +36,11 @@ def top_genes_per_basis(Z, genes, n_top):
     return top_genes
 
 
-def print_top_genes_per_basis(Z, genes, n_top=8):
+def print_top_genes_per_basis(Z, genes, eigvals, n_top=8):
     """Print top genes for each gene basis"""
     top_genes = top_genes_per_basis(Z, genes, n_top)
     for k in range(Z.shape[1]):
-        print(f"\nBasis {k}")
+        print(f"\nBasis {k} (λ = {eigvals[k]:.4f})")
         for g, w in top_genes[k].items():
             print(f"{g:15s} {w:+.3f}")
 

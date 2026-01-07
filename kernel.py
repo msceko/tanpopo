@@ -1,61 +1,56 @@
 import numpy as np
 import scipy.sparse as sp
+from scipy.sparse.linalg import LinearOperator
 from scipy.spatial.distance import cdist
 from sklearn.neighbors import NearestNeighbors
 
 
 def gaussian_kernel(coords, sigma):
     """
-    Kernel for ⟨N(mu_i), N(mu_j)⟩ with isotropic variance sigma²
+    Kernel for ⟨N(mu_i), N(mu_j)⟩ with isotropic variance sigma^2
 
     Returns:
         K : (spots, spots)
     """
     d2 = cdist(coords, coords, metric="sqeuclidean")
-    if sigma is None:
-        sigma = np.median(d2[d2 > 0])
     return np.exp(-d2 / (4 * sigma**2))
 
 
-def knn_gaussian_kernel(coords, sigma, k=50, symmetrize=True):
+def gaussian_kernel_sparse(coords, sigma, radius=None, symmetrize=True):
     """
-    Build a sparse kNN Gaussian kernel K (CSR) on spot coordinates.
+    Build a sparse nearest neighbour Gaussian kernel K (CSR) on spot coordinates.
 
     K_ij = exp(-||xi-xj||^2 / (4*sigma^2)) for j in kNN(i)
 
     Args:
         coords: (spots, 2) or (spots, d)
         sigma: float
-        k: number of neighbors (per row)
-        include_self: include i->i edge (recommended)
+        radius: range of parameter space for cutoff
         symmetrize: make K symmetric via (K + K.T)/2 (recommended for eigensolvers)
 
     Returns:
         K: scipy.sparse.csr_matrix shape (spots, spots)
     """
-    coords = np.asarray(coords, dtype=np.float64)
-    n = coords.shape[0]
+    if radius is None:
+        radius = 3.0 * sigma
+    radius = float(radius)
 
-    nn = NearestNeighbors(n_neighbors=k, algorithm="auto")
+    nn = NearestNeighbors(radius=radius, algorithm="ball_tree", metric="euclidean")
     nn.fit(coords)
-    dists, idx = nn.kneighbors(coords)  # (n, n_neighbors)
+    D = nn.radius_neighbors_graph(coords, mode="distance")  # CSR
 
-    rows = np.repeat(np.arange(n), idx.shape[1])
-    cols = idx.reshape(-1)
-
-    # weights
-    denom = 4.0 * float(sigma) * float(sigma)
-    w = np.exp(-(dists.reshape(-1) ** 2) / denom)
-
-    K = sp.csr_matrix((w, (rows, cols)), shape=(n, n))
+    K = D
+    K.data = np.exp(-(D.data**2) / (4 * sigma**2))
     if symmetrize:
         K = 0.5 * (K + K.T)
+    K.eliminate_zeros()
+
     return K
 
 
 def cs_kernel(W, K):
     """
-    ⟨p_i, p_j⟩ = w_iᵀ K w_j
+    ⟨p_i, p_j⟩ = w_i^T K w_j
 
     Args:
         W : (spots, genes)
@@ -65,11 +60,74 @@ def cs_kernel(W, K):
         S : (genes, genes)
     """
     G = W.T @ (K @ W)  # gene gram metrix
-    # G = 0.5 * (G + G.T)  # symmetrize for numerical drift
+    G = 0.5 * (G + G.T)  # symmetrize for numerical drift
     if sp.issparse(G):
         G = G.toarray()
     norm = np.sqrt(np.outer(np.diag(G), np.diag(G)))
     return G / norm
+
+
+def cs_kernel_operator(W, K, eps=1e-12, precompute_KW=True):
+    """
+    Build LinearOperator A implementing y = (H C H) x without forming C or G.
+    Implicit centered CS-cosine gene kernel operator for eigsh
+    C = D^{-1} (W^T K W) D^{-1}, then A = H C H
+
+    Assumes:
+      - W is sparse (CSC/CSR), shape (spots, genes)
+      - K is sparse CSR/CSC, shape (spots, spots), symmetric recommended
+
+    Returns:
+      A: LinearOperator (genes, genes)
+      d: (genes,) sqrt(diag(W^T K W)) used for cosine normalization
+    """
+    n_genes = W.shape[1]
+
+    # W as CSC for fast W.T @ v, and CSR for fast W @ x
+    W_csc = W.tocsc(copy=False)
+    W_csr = W.tocsr(copy=False)
+    K_csr = K.tocsr(copy=False)
+
+    # precompute diag(G) where G = W^T K W:
+    # diag(G)_g = w_g^T K w_g
+    if precompute_KW:
+        KW = K_csr @ W_csc
+        # diag is column-wise sum of elementwise product W * (K W)
+        diagG = np.asarray(W_csc.multiply(KW).sum(axis=0)).ravel()
+    else:
+        # slower but lower memory: compute diagG gene-by-gene if needed (not recommended)
+        diagG = np.zeros(n_genes, dtype=np.float64)
+        for g in range(n_genes):
+            wg = W_csc[:, g]
+            diagG[g] = float((wg.T @ (K_csr @ wg)).toarray()[0, 0])
+
+    d = np.sqrt(np.maximum(diagG, eps))  # cosine normalization denom per gene
+
+    def H_apply(x):
+        # double-centering in feature space corresponds to Hx = x - mean(x)
+        return x - np.mean(x)
+
+    def matvec(x):
+        x = np.asarray(x, dtype=np.float64).reshape(-1)
+        # right centering
+        x = H_apply(x)
+
+        # right cosine scaling
+        x = x / d
+
+        # y = W^T K (W x)
+        u = W_csr @ x  # (spots,)
+        v = K_csr @ u  # (spots,)
+        y = W_csc.T @ v  # (genes,)
+
+        # left cosine scaling
+        y = np.asarray(y).reshape(-1) / d
+
+        # left centering
+        y = H_apply(y)
+        return y
+
+    return LinearOperator((n_genes, n_genes), matvec=matvec, dtype=np.float64)
 
 
 def cs_divergence(S):

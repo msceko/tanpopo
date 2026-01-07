@@ -25,15 +25,15 @@ def orthogonalize_spatial_basis(phi, K, eps=1e-10):
     Returns:
         phi_ortho : (spots, components)
     """
-    # Gram matrix
-    G = phi.T @ K @ phi
-    # Eigen-decomposition (G is symmetric)
+    # gram matrix
+    G = phi.T @ (K @ phi)
+    # eigen-decomposition (G is symmetric)
     evals, evecs = eigh(G)
-    # Regularize small eigenvalues
+    # regularize small eigenvalues
     evals = np.maximum(evals, eps)
     # G^{-1/2}
     G_inv_sqrt = evecs @ np.diag(1.0 / np.sqrt(evals)) @ evecs.T
-    # Orthogonalized basis
+    # orthogonalized basis
     phi_ortho = phi @ G_inv_sqrt
 
     return phi_ortho
