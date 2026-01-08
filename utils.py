@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from contextlib import contextmanager
 from time import perf_counter
 
@@ -20,6 +21,17 @@ def timed(label: str, enabled: bool, sink=print, unit="s"):
     finally:
         dt = (perf_counter() - t0) * scale
         sink(f": {dt:.2f} {unit}")
+
+
+def make_iterable(obj):
+    """
+    Ensure obj is iterable.
+    """
+    if isinstance(obj, (str, bytes)):
+        return [obj]
+    if isinstance(obj, Iterable):
+        return obj
+    return [obj]
 
 
 def normalise_gene_weights(X):

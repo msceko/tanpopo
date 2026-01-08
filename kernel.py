@@ -4,6 +4,8 @@ from scipy.sparse.linalg import LinearOperator
 from scipy.spatial.distance import cdist
 from sklearn.neighbors import NearestNeighbors
 
+from utils import make_iterable
+
 
 def gaussian_kernel(coords, sigma):
     """
@@ -16,7 +18,9 @@ def gaussian_kernel(coords, sigma):
     return np.exp(-d2 / (4 * sigma**2))
 
 
-def gaussian_kernel_sparse(coords, sigma, radius=None, symmetrize=True):
+def gaussian_kernel_sparse(
+    coords, sigma, beta=None, radius=None, symmetrize=True, normalise_mass=True
+):
     """
     Build a sparse nearest neighbour Gaussian kernel K (CSR) on spot coordinates.
 
@@ -31,16 +35,27 @@ def gaussian_kernel_sparse(coords, sigma, radius=None, symmetrize=True):
     Returns:
         K: scipy.sparse.csr_matrix shape (spots, spots)
     """
+    sigma = np.asarray(make_iterable(sigma))
+    if beta is None:
+        beta = np.ones_like(sigma)
+    else:
+        beta = np.asarray(make_iterable(beta))
+    beta /= beta.sum()
     if radius is None:
-        radius = 3.0 * sigma
-    radius = float(radius)
+        radius = 3.0 * max(sigma)
 
     nn = NearestNeighbors(radius=radius, algorithm="ball_tree", metric="euclidean")
     nn.fit(coords)
     D = nn.radius_neighbors_graph(coords, mode="distance")  # CSR
 
-    K = D
-    K.data = np.exp(-(D.data**2) / (4 * sigma**2))
+    K = sp.csr_matrix(D.shape, dtype=np.float64)
+    for s, b in zip(sigma, beta):
+        Ks = D.copy()
+        Ks.data = np.exp(-(D.data**2) / (4 * s**2))
+        if normalise_mass:
+            Ks = Ks / Ks.sum()
+        K = K + Ks.multiply(b)
+
     if symmetrize:
         K = 0.5 * (K + K.T)
     K.eliminate_zeros()

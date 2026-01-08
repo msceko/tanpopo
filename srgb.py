@@ -27,7 +27,15 @@ def parse_args():
         "-s",
         "--sigma",
         type=float,
+        nargs="+",
         help="Standard deviation of Gaussian kernel",
+    )
+    parser.add_argument(
+        "-b",
+        "--beta",
+        type=float,
+        nargs="+",
+        help="Scaling factors for each sigma",
     )
     parser.add_argument(
         "--components",
@@ -60,7 +68,7 @@ def parse_args():
 
 
 def spatial_rkhs_gene_basis(
-    fname, output, sigma, n_components, radius, transform, plot, verbose=False
+    fname, output, sigma, beta, n_components, radius, transform, plot, verbose=False
 ):
     with timed("Loading data", verbose):
         adata = sq.read.visium(fname)
@@ -69,7 +77,7 @@ def spatial_rkhs_gene_basis(
 
     with timed("Computing kernel matrix", verbose):
         W = normalise_gene_weights(X)
-        K = gaussian_kernel_sparse(coords, sigma, radius)
+        K = gaussian_kernel_sparse(coords, sigma, beta, radius)
 
     with timed("CS matrix", verbose):
         S = cs_kernel_operator(W, K)
@@ -80,7 +88,7 @@ def spatial_rkhs_gene_basis(
         phi = orthogonalize_spatial_basis(phi, K)
 
     if verbose:
-        print_top_genes_per_basis(Z, gene_names, eigvals, n_components)
+        print_top_genes_per_basis(Z, gene_names, eigvals)
 
     adata.uns["spatial_basis_genes"] = gene_names
     adata.uns["spatial_gene_basis"] = eigvecs
@@ -99,6 +107,7 @@ if __name__ == "__main__":
         args.input,
         args.output,
         args.sigma,
+        args.beta,
         args.components,
         args.radius,
         args.transform,
