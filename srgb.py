@@ -60,6 +60,11 @@ def parse_args():
         help="Plot spatial gene basis",
     )
     parser.add_argument(
+        "--lowmem",
+        action="store_false",
+        help="Low memory kernel construction (slower)",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Time and print each step.",
@@ -68,7 +73,16 @@ def parse_args():
 
 
 def spatial_rkhs_gene_basis(
-    fname, output, sigma, beta, n_components, radius, transform, plot, verbose=False
+    fname,
+    output,
+    sigma,
+    beta,
+    n_components,
+    radius,
+    transform,
+    plot,
+    precompute_KW=True,
+    verbose=False,
 ):
     with timed("Loading data", verbose):
         adata = sq.read.visium(fname)
@@ -80,7 +94,7 @@ def spatial_rkhs_gene_basis(
         K = gaussian_kernel_sparse(coords, sigma, beta, radius)
 
     with timed("CS matrix", verbose):
-        S = cs_kernel_operator(W, K)
+        S = cs_kernel_operator(W, K, precompute_KW=precompute_KW)
 
     with timed("Kernel PCA", verbose):
         Z, eigvals, eigvecs = kernel_pca_iterative(S, n_components)
@@ -112,5 +126,6 @@ if __name__ == "__main__":
         args.radius,
         args.transform,
         args.plot,
+        args.lowmem,
         args.verbose,
     )
