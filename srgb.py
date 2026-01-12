@@ -4,7 +4,7 @@ import squidpy as sq
 from data import extract_visium_data
 from kernel import gaussian_kernel_sparse, cs_kernel_operator
 from kpca import kernel_pca_iterative
-from basis import project_spatial_basis, orthogonalize_spatial_basis
+from basis import project_spatial_basis, orthogonalize_spatial_basis, orient_vectors
 from utils import timed, normalise_gene_weights, print_top_genes_per_basis, plot_spatial_basis
 
 
@@ -89,15 +89,16 @@ def spatial_rkhs_gene_basis(
         adata.var_names_make_unique()
         X, coords, gene_names = extract_visium_data(adata, transform=transform)
 
-    with timed("Computing kernel matrix", verbose):
+    with timed("Kernel matrix", verbose):
         W = normalise_gene_weights(X)
         K = gaussian_kernel_sparse(coords, sigma, beta, radius)
 
-    with timed("CS matrix", verbose):
+    with timed("Cosine matrix", verbose):
         S = cs_kernel_operator(W, K, precompute_KW=precompute_KW)
 
     with timed("Kernel PCA", verbose):
         Z, eigvals, eigvecs = kernel_pca_iterative(S, n_components)
+        Z, eigvecs = orient_vectors(Z), orient_vectors(eigvecs)
         phi = project_spatial_basis(X, eigvecs)
         phi = orthogonalize_spatial_basis(phi, K)
 

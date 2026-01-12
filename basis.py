@@ -37,3 +37,11 @@ def orthogonalize_spatial_basis(phi, K, eps=1e-10):
     phi_ortho = phi @ G_inv_sqrt
 
     return phi_ortho
+
+
+def orient_vectors(V):
+    """Orient vector V according to its sum of squared components."""
+    Vpos = sum((V > 0) * (V**2), 1)
+    Vneg = sum((V < 0) * (V**2), 1)
+    signs = np.sign(Vpos - Vneg)
+    return signs * V
