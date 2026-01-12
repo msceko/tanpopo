@@ -2,7 +2,9 @@ from collections.abc import Iterable
 from contextlib import contextmanager
 from time import perf_counter
 
+import anndata as ad
 import numpy as np
+import pandas as pd
 import squidpy as sq
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import normalize
@@ -39,19 +41,70 @@ def normalise_gene_weights(X):
     return normalize(X, norm="l1", axis=0)
 
 
-def top_genes_per_basis(Z, genes, n_top):
+def bin_spatial_basis(
+    adata,
+    prefix="spatial_basis_",
+    bin_size=16,
+    reducer="mean",  # "mean" or "median"
+):
+    """Bin spatial basis vectors for plotting"""
+    # find all matching obs columns
+    basis_cols = [c for c in adata.obs.columns if c.startswith(prefix)]
+    if not basis_cols:
+        raise KeyError(f"No adata.obs columns start with {prefix!r}")
+
+    xy = np.asarray(adata.obsm["spatial"])
+    bx = np.floor_divide(xy[:, 0], bin_size).astype(np.int32)
+    by = np.floor_divide(xy[:, 1], bin_size).astype(np.int32)
+    bin_id = bx.astype(str) + "_" + by.astype(str)
+
+    # build a compact dataframe: coords + only the columns you need
+    df = pd.DataFrame(
+        {
+            "bin": bin_id,
+            "x": xy[:, 0],
+            "y": xy[:, 1],
+        },
+        index=adata.obs_names,
+    )
+    df[basis_cols] = adata.obs[basis_cols].to_numpy()  # avoids pandas alignment surprises
+
+    g = df.groupby("bin", sort=False)
+
+    # bin centroids
+    coords = g[["x", "y"]].mean()
+
+    # reduce each basis column per bin
+    if reducer == "mean":
+        vals = g[basis_cols].mean()
+    elif reducer == "median":
+        vals = g[basis_cols].median()
+    else:
+        raise ValueError("reducer must be 'mean' or 'median'")
+
+    # minimal AnnData for plotting
+    out = ad.AnnData(X=np.zeros((coords.shape[0], 0), dtype=np.float32))
+    out.obsm["spatial"] = coords.to_numpy()
+    out.obs = vals  # includes all spatial_basis_* columns
+    out.obs_names = coords.index.astype(str)
+    out.uns["spatial"] = adata.uns.get("spatial", {})
+
+    return out, basis_cols
+
+
+def top_genes_per_basis(eigvecs, genes, n_top):
     """Compute top genes for each gene basis"""
     top_genes = []
-    for k in range(Z.shape[1]):
-        idx = np.argsort(np.abs(Z[:, k]))[::-1][:n_top]
-        top_genes.append({genes[i]: Z[i, k] for i in idx})
+    for k in range(eigvecs.shape[1]):
+        idx = np.argsort(np.abs(eigvecs[:, k]))[::-1][:n_top]
+        top_genes.append({genes[i]: eigvecs[i, k] for i in idx})
     return top_genes
 
 
-def print_top_genes_per_basis(Z, genes, eigvals, n_top=8):
+def print_top_genes_per_basis(eigvecs, eigvals, genes, n_top=8):
     """Print top genes for each gene basis"""
-    top_genes = top_genes_per_basis(Z, genes, n_top)
-    for k in range(Z.shape[1]):
+    top_genes = top_genes_per_basis(eigvecs, genes, n_top)
+    for k in range(eigvecs.shape[1]):
         print(f"\nBasis {k} (λ = {eigvals[k]:.4f})")
         for g, w in top_genes[k].items():
             print(f"{g:15s} {w:+.3f}")
@@ -64,5 +117,5 @@ def plot_spatial_basis(adata, phi, prefix="spatial_basis"):
         keys.append(f"{prefix}_{k}")
         adata.obs[keys[k]] = phi[:, k]
 
-    sq.pl.spatial_scatter(adata, color=keys)
+    sq.pl.spatial_scatter(adata, color=keys, img=None)
     plt.show()

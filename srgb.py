@@ -103,12 +103,13 @@ def spatial_rkhs_gene_basis(
         phi = orthogonalize_spatial_basis(phi, K)
 
     if verbose:
-        print_top_genes_per_basis(Z, gene_names, eigvals)
+        print_top_genes_per_basis(eigvecs, eigvals, gene_names)
 
     adata.uns["spatial_basis_genes"] = gene_names
-    adata.uns["spatial_gene_basis"] = eigvecs
+    adata.uns["spatial_gene_loadings"] = eigvecs
     adata.uns["spatial_gene_eigvals"] = eigvals
     adata.uns["spatial_gene_scores"] = Z
+    adata.uns["spatial_gene_basis"] = phi
 
     if output:
         adata.write(output)
