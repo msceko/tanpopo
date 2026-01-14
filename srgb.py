@@ -4,7 +4,7 @@ import squidpy as sq
 from data import extract_visium_data
 from kernel import gaussian_kernel_sparse, cs_kernel_operator
 from kpca import kernel_pca_iterative
-from basis import project_spatial_basis, orthogonalize_spatial_basis, orient_vectors
+from basis import project_spatial_basis, orthogonalise_spatial_basis, orient_vectors
 from utils import timed, normalise_gene_weights, print_top_genes_per_basis, plot_spatial_basis
 
 
@@ -55,6 +55,11 @@ def parse_args():
         help="Counts transform",
     )
     parser.add_argument(
+        "--orthogonalise",
+        action="store_true",
+        help="Orthonalise basis spatially.",
+    )
+    parser.add_argument(
         "--plot",
         action="store_true",
         help="Plot spatial gene basis",
@@ -80,6 +85,7 @@ def spatial_rkhs_gene_basis(
     n_components,
     radius,
     transform,
+    orthogonalise_basis,
     plot,
     precompute_KW=True,
     verbose=False,
@@ -100,7 +106,9 @@ def spatial_rkhs_gene_basis(
         Z, eigvals, eigvecs = kernel_pca_iterative(S, n_components)
         Z, eigvecs = orient_vectors(Z), orient_vectors(eigvecs)
         phi = project_spatial_basis(X, eigvecs)
-        phi = orthogonalize_spatial_basis(phi, K)
+
+    if orthogonalise_basis:
+        phi, eigvecs = orthogonalise_spatial_basis(phi, K, eigvecs)
 
     if verbose:
         print_top_genes_per_basis(eigvecs, eigvals, gene_names)
@@ -127,6 +135,7 @@ if __name__ == "__main__":
         args.components,
         args.radius,
         args.transform,
+        args.orthogonalise,
         args.plot,
         args.lowmem,
         args.verbose,
