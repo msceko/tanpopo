@@ -1,11 +1,19 @@
 import argparse
 import squidpy as sq
+import matplotlib.pyplot as plt
 
 from data import extract_visium_data
 from kernel import gaussian_kernel_sparse, cs_kernel_operator
 from kpca import kernel_pca_iterative
 from basis import project_spatial_basis, orthogonalise_spatial_basis, orient_vectors
-from utils import timed, normalise_gene_weights, print_top_genes_per_basis, plot_spatial_basis
+from utils import (
+    timed,
+    normalise_gene_weights,
+    print_top_genes_per_basis,
+    plot_spatial_basis,
+    plot_spatial_basis_signed,
+    plot_cumulative_contribution,
+)
 
 
 def parse_args():
@@ -123,6 +131,9 @@ def spatial_rkhs_gene_basis(
         adata.write(output)
     if plot:
         plot_spatial_basis(adata, phi)
+        plot_spatial_basis_signed(adata, X, eigvecs)
+        plot_cumulative_contribution(eigvecs)
+        plt.show()
 
 
 if __name__ == "__main__":
