@@ -2,7 +2,7 @@ import argparse
 import squidpy as sq
 import matplotlib.pyplot as plt
 
-from data import extract_visium_data
+from data import extract_visium_data, load_visium_hd
 from kernel import gaussian_kernel_sparse, cs_kernel_operator
 from kpca import kernel_pca_iterative
 from basis import project_spatial_basis, orthogonalise_spatial_basis, orient_vectors
@@ -63,6 +63,13 @@ def parse_args():
         help="Counts transform",
     )
     parser.add_argument(
+        "--platform",
+        type=str,
+        choices=["visium", "visium_hd"],
+        default="visium",
+        help="Spatial platform.",
+    )
+    parser.add_argument(
         "--orthogonalise",
         action="store_true",
         help="Orthonalise basis spatially.",
@@ -86,7 +93,7 @@ def parse_args():
 
 
 def spatial_rkhs_gene_basis(
-    fname,
+    adata,
     output,
     sigma,
     beta,
@@ -98,10 +105,7 @@ def spatial_rkhs_gene_basis(
     precompute_KW=True,
     verbose=False,
 ):
-    with timed("Loading data", verbose):
-        adata = sq.read.visium(fname)
-        adata.var_names_make_unique()
-        X, coords, gene_names = extract_visium_data(adata, transform=transform)
+    X, coords, gene_names = extract_visium_data(adata, transform=transform)
 
     with timed("Kernel matrix", verbose):
         W = normalise_gene_weights(X)
@@ -138,8 +142,16 @@ def spatial_rkhs_gene_basis(
 
 if __name__ == "__main__":
     args = parse_args()
+
+    with timed("Loading data", args.verbose):
+        if args.platform == "visium":
+            adata = sq.read.visium(args.input)
+        elif args.platform == "visium_hd":
+            adata = load_visium_hd(args.input)
+        adata.var_names_make_unique()
+
     spatial_rkhs_gene_basis(
-        args.input,
+        adata,
         args.output,
         args.sigma,
         args.beta,
