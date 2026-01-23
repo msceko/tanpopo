@@ -17,6 +17,9 @@ def extract_visium_data(
         coords : (n_spots, 2) spatial coordinates
         gene_names
     """
+    sc.pp.filter_genes(adata, min_counts=min_counts)
+    # gene_mask = (adata.X.toarray() > 0).mean(axis=0) >= 0.05
+
     if normalise:
         sc.pp.normalize_total(adata, target_sum=1e4)
     if transform == "log1p":
@@ -36,12 +39,6 @@ def extract_visium_data(
 
     coords = adata.obsm["spatial"].astype(np.float64)
     gene_names = np.array(adata.var_names)
-
-    # Filter low-count genes
-    gene_mask = np.array(X.sum(axis=0)).ravel() >= min_counts
-    # gene_mask = (adata.X.toarray() > 0).mean(axis=0) >= 0.05
-    X = X[:, gene_mask]
-    gene_names = gene_names[gene_mask]
 
     return X, coords, gene_names
 
