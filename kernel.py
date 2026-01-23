@@ -40,7 +40,7 @@ def gaussian_kernel_sparse(
         beta = np.ones_like(sigma)
     else:
         beta = np.asarray(make_iterable(beta))
-    beta /= beta.sum()
+    beta = beta / beta.sum()
     if radius is None:
         radius = 3.0 * max(sigma)
 
@@ -82,7 +82,7 @@ def cs_kernel(W, K):
     return G / norm
 
 
-def cs_kernel_operator(W, K, eps=1e-12, precompute_KW=True):
+def cs_kernel_operator(W, K, eps=1e-12, precompute_KW=True, return_KW=False):
     """
     Build LinearOperator A implementing y = (H C H) x without forming C or G.
     Implicit centered CS-cosine gene kernel operator for eigsh
@@ -142,7 +142,11 @@ def cs_kernel_operator(W, K, eps=1e-12, precompute_KW=True):
         y = H_apply(y)
         return y
 
-    return LinearOperator((n_genes, n_genes), matvec=matvec, dtype=np.float64)
+    A = LinearOperator((n_genes, n_genes), matvec=matvec, dtype=np.float64)
+
+    if return_KW:
+        return A, KW
+    return A
 
 
 def cs_divergence(S):
