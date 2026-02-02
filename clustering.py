@@ -6,7 +6,7 @@ import scanpy as sc
 import squidpy as sq
 import matplotlib.pyplot as plt
 
-from plot import plot_gene_clusters
+from plot import plot_gene_clusters, plot_umap
 from utils import timed
 
 
@@ -144,4 +144,5 @@ if __name__ == "__main__":
     if args.plot:
         plot_gene_clusters(adata, key="leiden")
         sq.pl.spatial_scatter(adata, color="leiden", img=None, cmap="tab20")
+        plot_umap(adata, adata.uns["gene_features"], args.ngenes, key="leiden")
         plt.show()
