@@ -82,7 +82,7 @@ def cs_kernel(W, K):
     return G / norm
 
 
-def cs_kernel_operator(W, K, eps=1e-12, precompute_KW=True, return_KW=False):
+def cs_kernel_operator(W, K, eps=1e-12, precompute_KW=True, return_KW=True):
     """
     Build LinearOperator A implementing y = (H C H) x without forming C or G.
     Implicit centered CS-cosine gene kernel operator for eigsh

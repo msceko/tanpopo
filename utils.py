@@ -156,6 +156,17 @@ def plot_spatial_basis_signed(adata, X, eigvecs):
     plot_spatial_basis(adata, phi_neg, "spatial_basis_negative")
 
 
+def plot_gene_clusters(adata, key="leiden"):
+    """Plot spatial distributions of gene clusters"""
+    keys = []
+    for cluster in range(adata.var[key].max() + 1):
+        keys.append(f"gene_cluster_{cluster}")
+        genes = (adata.var[key] == cluster).tolist()
+        adata.obs[keys[cluster]] = np.asarray(adata.X[:, genes].sum(axis=1)).ravel()
+
+    sq.pl.spatial_scatter(adata, color=keys, img=None)
+
+
 def cumulative_contribution(eigvecs):
     """Cumulative squared-loading contribution curve for one component"""
     sq_sorted = np.sort(eigvecs**2, axis=0)[::-1]

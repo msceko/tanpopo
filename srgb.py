@@ -65,7 +65,7 @@ def parse_args():
     parser.add_argument(
         "--platform",
         type=str,
-        choices=["visium", "visium_hd"],
+        choices=["visium", "visiumhd"],
         default="visium",
         help="Spatial platform.",
     )
@@ -112,7 +112,7 @@ def spatial_rkhs_gene_basis(
         K = gaussian_kernel_sparse(coords, sigma, beta, radius)
 
     with timed("Cosine matrix", verbose):
-        S = cs_kernel_operator(W, K, precompute_KW=precompute_KW)
+        S, KW = cs_kernel_operator(W, K, precompute_KW=precompute_KW)
 
     with timed("Kernel PCA", verbose):
         Z, eigvals, eigvecs = kernel_pca_iterative(S, n_components)
@@ -130,6 +130,7 @@ def spatial_rkhs_gene_basis(
     adata.uns["spatial_gene_eigvals"] = eigvals
     adata.uns["spatial_gene_scores"] = Z
     adata.uns["spatial_gene_basis"] = phi
+    adata.uns["KW"] = KW
 
     if output:
         adata.write(output)
@@ -139,6 +140,8 @@ def spatial_rkhs_gene_basis(
         plot_cumulative_contribution(eigvecs)
         plt.show()
 
+    return adata
+
 
 if __name__ == "__main__":
     args = parse_args()
@@ -146,11 +149,11 @@ if __name__ == "__main__":
     with timed("Loading data", args.verbose):
         if args.platform == "visium":
             adata = sq.read.visium(args.input)
-        elif args.platform == "visium_hd":
+        else:
             adata = load_visium_hd(args.input)
         adata.var_names_make_unique()
 
-    spatial_rkhs_gene_basis(
+    adata = spatial_rkhs_gene_basis(
         adata,
         args.output,
         args.sigma,
