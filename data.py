@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import anndata as ad
 import numpy as np
 import pandas as pd
 import scanpy as sc
@@ -128,3 +129,117 @@ def load_visium_hd(
         }
 
     return adata
+
+
+def xenium_adata(data, meta, genes, x, y, library_id: str = "library_id"):
+    """Construct visium-like anndata with xenium data"""
+    # Spot/bin IDs (Visium uses barcodes; here we create stable names)
+    obs_names = pd.Index(
+        [f"bin_y{yb}_x{xb}" for yb, xb in zip(meta["y_bin"], meta["x_bin"])], name="spot_id"
+    )
+    var_names = pd.Index(genes.astype(str), name="gene_ids")
+
+    obs = pd.DataFrame(meta, index=obs_names)
+    var = pd.DataFrame(index=var_names)
+    adata = ad.AnnData(X=data, obs=obs, var=var)
+
+    # Visium-like spatial coordinates: (x, y)
+    adata.obsm["spatial"] = np.column_stack([x, y]).astype(np.float32)
+
+    # Minimal Visium-ish uns['spatial'] stub (real Visium includes images/scalefactors)
+    adata.uns["spatial"] = {
+        library_id: {
+            "images": {},  # add "hires"/"lowres" arrays if you have them
+            "scalefactors": {
+                "tissue_hires_scalef": 1.0,
+                "tissue_lowres_scalef": 1.0,
+                "spot_diameter_fullres": meta["bin_size"],
+            },  # add scalefactors if you want Visium tooling compatibility
+            "metadata": {
+                "source": "binned_transcripts",
+                "bin_size": meta["bin_size"],
+            },
+        }
+    }
+
+    return adata
+
+
+def load_xenium_binned(
+    fname: str,
+    bin_size: float,
+    x_col: str = "x_location",
+    y_col: str = "y_location",
+    gene_col: str = "feature_name",
+    qv_col: str = "qv",
+    library_id: str = "library_id",
+    remove=["Control", "Codeword", "BLANK"],
+    dtype=np.float32,
+):
+    """
+    Sparse gene-by-grid matrix using from Xenium transcripts.parquet.
+
+    Returns:
+      X: scipy.sparse.csr_matrix, shape (M_occ, N_genes)
+      meta: dict with mappings to interpret rows/cols
+    """
+    df = pd.read_parquet(fname, columns=[gene_col, x_col, y_col, qv_col])
+    df[gene_col] = df[gene_col].astype("str").astype("category")
+    df = df[~df[gene_col].str.contains("|".join(remove))]
+    df[gene_col] = df[gene_col].cat.remove_unused_categories()
+
+    x, y = df[x_col].to_numpy(), df[y_col].to_numpy()
+    x_min, x_max = x.min(), x.max()
+    y_min, y_max = y.min(), y.max()
+
+    n_bins_x = int(np.ceil((x_max - x_min) / bin_size))
+    n_bins_y = int(np.ceil((y_max - y_min) / bin_size))
+    x_edges = x_min + bin_size * np.arange(n_bins_x + 1)
+    y_edges = y_min + bin_size * np.arange(n_bins_y + 1)
+
+    # Bin indices
+    xb = np.searchsorted(x_edges, x, side="right") - 1
+    yb = np.searchsorted(y_edges, y, side="right") - 1
+    xb = np.clip(xb, 0, n_bins_x - 1)
+    yb = np.clip(yb, 0, n_bins_y - 1)
+
+    # Flatten full-grid row id
+    full_row_id = yb * n_bins_x + xb
+
+    # Reindex to occupied-only row ids: 0..M_occ-1
+    occ_row_codes, occ_row_uniques = pd.factorize(full_row_id, sort=True)
+
+    # Encode genes to columns
+    gene_codes, genes = pd.factorize(df[gene_col], sort=True)
+
+    qv_vals = df[qv_col].to_numpy()
+    weights = 1 - 10 ** (-qv_vals / 10)
+
+    # Aggregate duplicates (occupied_row, gene)
+    agg = (
+        pd.DataFrame({"row": occ_row_codes, "col": gene_codes, "val": weights})
+        .groupby(["row", "col"], sort=False, as_index=False)["val"]
+        .sum()
+    )
+
+    X = sp.coo_matrix(
+        (agg["val"].to_numpy(), (agg["row"].to_numpy(), agg["col"].to_numpy())),
+        shape=(len(occ_row_uniques), len(genes)),
+        dtype=dtype,
+    ).tocsr()
+
+    y_bin = (occ_row_uniques // n_bins_x).astype(np.int32)
+    x_bin = (occ_row_uniques % n_bins_x).astype(np.int32)
+    x_center = (x_edges[x_bin] + x_edges[x_bin + 1]) / 2.0
+    y_center = (y_edges[y_bin] + y_edges[y_bin + 1]) / 2.0
+
+    meta = {
+        "bin_size": bin_size,
+        "x_bin": x_bin,
+        "y_bin": y_bin,
+        "x_center": x_center,
+        "y_center": y_center,
+        "full_row_id": occ_row_uniques,
+    }
+
+    return xenium_adata(X, meta, genes, x_center, y_center, library_id)

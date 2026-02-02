@@ -2,88 +2,12 @@ import argparse
 import squidpy as sq
 import matplotlib.pyplot as plt
 
-from data import extract_visium_data, load_visium_hd
+from data import extract_visium_data, load_visium_hd, load_xenium_binned
 from kernel import gaussian_kernel_sparse, cs_kernel_operator
 from kpca import kernel_pca_iterative
 from basis import project_spatial_basis, orthogonalise_spatial_basis, orient_vectors
 from plot import plot_spatial_basis, plot_spatial_basis_signed, plot_cumulative_contribution
 from utils import timed, normalise_gene_weights, print_top_genes_per_basis
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Spatial RKHS Gene Basis")
-    parser.add_argument(
-        "-i",
-        "--input",
-        type=str,
-        required=True,
-        help="Visium data path",
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=str,
-        help="Save .h5ad-formatted hdf5 file",
-    )
-    parser.add_argument(
-        "-s",
-        "--sigma",
-        type=float,
-        nargs="+",
-        help="Standard deviation of Gaussian kernel",
-    )
-    parser.add_argument(
-        "-b",
-        "--beta",
-        type=float,
-        nargs="+",
-        help="Scaling factors for each sigma",
-    )
-    parser.add_argument(
-        "--components",
-        type=int,
-        default=8,
-        help="Number of spatial components",
-    )
-    parser.add_argument(
-        "--radius",
-        type=float,
-        help="Radius of neighbourhood for spatial computation",
-    )
-    parser.add_argument(
-        "--transform",
-        type=str,
-        choices=["sqrt", "log1p"],
-        help="Counts transform",
-    )
-    parser.add_argument(
-        "--platform",
-        type=str,
-        choices=["visium", "visiumhd"],
-        default="visium",
-        help="Spatial platform.",
-    )
-    parser.add_argument(
-        "--orthogonalise",
-        action="store_true",
-        help="Orthonalise basis spatially.",
-    )
-    parser.add_argument(
-        "--plot",
-        action="store_true",
-        help="Plot spatial gene basis",
-    )
-    parser.add_argument(
-        "--lowmem",
-        action="store_false",
-        help="Low memory kernel construction (slower)",
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Time and print each step.",
-    )
-    return parser.parse_args()
 
 
 def spatial_rkhs_gene_basis(
@@ -130,11 +54,92 @@ def spatial_rkhs_gene_basis(
         adata.write(output)
     if plot:
         plot_spatial_basis(adata, phi)
-        plot_spatial_basis_signed(adata, X, eigvecs)
+        # plot_spatial_basis_signed(adata, X, eigvecs)
         plot_cumulative_contribution(eigvecs)
         plt.show()
 
     return adata
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Spatial RKHS Gene Basis")
+    parser.add_argument(
+        "-i",
+        "--input",
+        type=str,
+        required=True,
+        help="Visium data path",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=str,
+        help="Save .h5ad-formatted hdf5 file",
+    )
+    parser.add_argument(
+        "-s",
+        "--sigma",
+        type=float,
+        nargs="+",
+        help="Standard deviation of Gaussian kernel",
+    )
+    parser.add_argument(
+        "-b",
+        "--beta",
+        type=float,
+        nargs="+",
+        help="Scaling factors for each sigma",
+    )
+    parser.add_argument(
+        "--components",
+        type=int,
+        default=8,
+        help="Number of spatial components",
+    )
+    parser.add_argument(
+        "--radius",
+        type=float,
+        help="Radius of neighbourhood for spatial computation",
+    )
+    parser.add_argument(
+        "--bin",
+        type=float,
+        help="Bin size (for xenium)",
+    )
+    parser.add_argument(
+        "--transform",
+        type=str,
+        choices=["sqrt", "log1p"],
+        help="Counts transform",
+    )
+    parser.add_argument(
+        "--platform",
+        type=str,
+        choices=["visium", "visiumhd", "xenium"],
+        default="visium",
+        help="Spatial platform.",
+    )
+    parser.add_argument(
+        "--orthogonalise",
+        action="store_true",
+        help="Orthonalise basis spatially.",
+    )
+    parser.add_argument(
+        "--plot",
+        action="store_true",
+        help="Plot spatial gene basis",
+    )
+    parser.add_argument(
+        "--lowmem",
+        action="store_false",
+        help="Low memory kernel construction (slower)",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Time and print each step.",
+    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
@@ -143,8 +148,12 @@ if __name__ == "__main__":
     with timed("Loading data", args.verbose):
         if args.platform == "visium":
             adata = sq.read.visium(args.input)
-        else:
+        elif args.platform == "visiumhd":
             adata = load_visium_hd(args.input)
+        else:
+            if args.bin is None:
+                args.bin = args.sigma[0]
+            adata = load_xenium_binned(args.input, args.bin)
         adata.var_names_make_unique()
 
     adata = spatial_rkhs_gene_basis(
