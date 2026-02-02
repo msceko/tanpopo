@@ -1,0 +1,45 @@
+import numpy as np
+import squidpy as sq
+import matplotlib.pyplot as plt
+
+from basis import project_spatial_basis
+from utils import cumulative_contribution
+
+
+def plot_spatial_basis(adata, phi, prefix="spatial_basis"):
+    """Plot spatial gene basis"""
+    keys = []
+    for k in range(phi.shape[1]):
+        keys.append(f"{prefix}_{k}")
+        adata.obs[keys[k]] = phi[:, k]
+
+    sq.pl.spatial_scatter(adata, color=keys, img=None)
+
+
+def plot_spatial_basis_signed(adata, X, eigvecs):
+    """Plot positive and negative components of gene basis independently"""
+    phi_pos = project_spatial_basis(X, np.maximum(eigvecs, 0))
+    plot_spatial_basis(adata, phi_pos, "spatial_basis_positive")
+    phi_neg = project_spatial_basis(X, np.maximum(-eigvecs, 0))
+    plot_spatial_basis(adata, phi_neg, "spatial_basis_negative")
+
+
+def plot_gene_clusters(adata, key="leiden"):
+    """Plot spatial distributions of gene clusters"""
+    keys = []
+    for cluster in range(adata.var[key].max() + 1):
+        keys.append(f"gene_cluster_{cluster}")
+        genes = (adata.var[key] == cluster).tolist()
+        adata.obs[keys[cluster]] = np.asarray(adata.X[:, genes].sum(axis=1)).ravel()
+
+    sq.pl.spatial_scatter(adata, color=keys, img=None)
+
+
+def plot_cumulative_contribution(eigvecs):
+    """Plot cumulative distributions for each squared eigenvector"""
+    plt.figure()
+    plt.plot(cumulative_contribution(eigvecs))
+    plt.xlabel("Number of genes")
+    plt.ylabel("Cumulative contribution")
+    plt.axhline(0.8, linestyle="--", alpha=0.5)
+    plt.legend([f"Basis {n}" for n in range(eigvecs.shape[1])])

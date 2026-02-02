@@ -6,7 +6,8 @@ import scanpy as sc
 import squidpy as sq
 import matplotlib.pyplot as plt
 
-from utils import timed, plot_gene_clusters
+from plot import plot_gene_clusters
+from utils import timed
 
 
 def choose_k_by_energy(eigvals, energy=0.9):

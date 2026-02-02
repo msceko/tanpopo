@@ -6,14 +6,8 @@ from data import extract_visium_data, load_visium_hd
 from kernel import gaussian_kernel_sparse, cs_kernel_operator
 from kpca import kernel_pca_iterative
 from basis import project_spatial_basis, orthogonalise_spatial_basis, orient_vectors
-from utils import (
-    timed,
-    normalise_gene_weights,
-    print_top_genes_per_basis,
-    plot_spatial_basis,
-    plot_spatial_basis_signed,
-    plot_cumulative_contribution,
-)
+from plot import plot_spatial_basis, plot_spatial_basis_signed, plot_cumulative_contribution
+from utils import timed, normalise_gene_weights, print_top_genes_per_basis
 
 
 def parse_args():
