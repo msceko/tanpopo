@@ -125,7 +125,8 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    adata = sc.read_h5ad(args.input)
+    with timed("Loading data", enabled=True):
+        adata = sc.read_h5ad(args.input)
 
     with timed("Gene clustering", enabled=True):
         adata.uns["gene_features"] = (adata.uns["spatial_gene_basis"].T @ adata.uns["KW"]).T
@@ -144,5 +145,6 @@ if __name__ == "__main__":
     if args.plot:
         plot_gene_clusters(adata, key="leiden")
         sq.pl.spatial_scatter(adata, color="leiden", img=None, cmap="tab20")
-        plot_umap(adata, adata.uns["gene_features"], args.ngenes, key="leiden")
+        plot_umap(adata.uns["gene_features"], adata.var["leiden"], adata.var_names, args.ngenes)
+        # plot_umap(adata.uns["spatial_gene_basis"], adata.obs["leiden"], adata.obs_names, args.nspots)
         plt.show()
