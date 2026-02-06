@@ -52,3 +52,8 @@ def orient_vectors(V):
     Vneg = sum((V < 0) * (V**2), 1)
     signs = np.sign(Vpos - Vneg)
     return signs * V
+
+
+def fractional_energy(phi, eps=1e-12):
+    E = phi**2
+    return E / (E.sum(axis=1, keepdims=True) + eps)
