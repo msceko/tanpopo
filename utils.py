@@ -125,7 +125,7 @@ def print_top_genes_per_basis(eigvecs, eigvals, genes, n_top=8):
     top_genes_pos = top_genes_per_basis(eigvecs, genes, n_top, "pos")
     top_genes_neg = top_genes_per_basis(eigvecs, genes, n_top, "neg")
     for k in range(eigvecs.shape[1]):
-        print(f"\nBasis {k} (λ = {eigvals[k]:.4f})")
+        print(f"\nEigenmode {k} (λ = {eigvals[k]:.4f})")
         for (g_abs, w_abs), (g_pos, w_pos), (g_neg, w_neg) in zip(
             top_genes_abs[k].items(), top_genes_pos[k].items(), top_genes_neg[k].items()
         ):

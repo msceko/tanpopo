@@ -24,7 +24,7 @@ def inv_sqrt(G, eps=1e-10):
     return evecs @ np.diag(1.0 / np.sqrt(evals)) @ evecs.T
 
 
-def orthogonalise_spatial_basis(phi, K, V=None):
+def whiten_eigenmodes(phi, K, V=None):
     """
     Orthogonalise spatial basis under inner product defined by K.
 

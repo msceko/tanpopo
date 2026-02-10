@@ -7,7 +7,7 @@ from kernel import gaussian_kernel_sparse, cs_kernel_operator
 from kpca import kernel_pca_iterative
 from basis import (
     project_spatial_basis,
-    orthogonalise_spatial_basis,
+    whiten_eigenmodes,
     orient_vectors,
     fractional_energy,
 )
@@ -23,7 +23,7 @@ def spatial_rkhs_gene_basis(
     n_components,
     radius,
     transform,
-    orthogonalise_basis,
+    whiten,
     plot,
     precompute_KW=True,
     verbose=False,
@@ -42,17 +42,16 @@ def spatial_rkhs_gene_basis(
         Z, eigvecs = orient_vectors(Z), orient_vectors(eigvecs)
         phi = project_spatial_basis(X, eigvecs)
 
-    if orthogonalise_basis:
-        phi, eigvecs = orthogonalise_spatial_basis(phi, K, eigvecs)
+    if whiten:
+        phi, eigvecs = whiten_eigenmodes(phi, K, eigvecs)
 
     if verbose:
         print_top_genes_per_basis(eigvecs, eigvals, gene_names)
 
-    adata.uns["spatial_basis_genes"] = gene_names
     adata.uns["spatial_gene_loadings"] = eigvecs
-    adata.uns["spatial_gene_eigvals"] = eigvals
+    adata.uns["spatial_gene_energy"] = eigvals
     adata.uns["spatial_gene_scores"] = Z
-    adata.uns["spatial_gene_basis"] = phi
+    adata.uns["spatial_eigenmodes"] = phi
     adata.uns["KW"] = KW
 
     if output:
@@ -60,8 +59,8 @@ def spatial_rkhs_gene_basis(
     if plot:
         plot_spatial_basis(adata, phi)
         # plot_spatial_basis_signed(adata, X, eigvecs)
-        plot_spatial_basis(adata, fractional_energy(phi), "fractional_energy")
-        plot_cumulative_contribution(eigvecs)
+        # plot_spatial_basis(adata, fractional_energy(phi), "fractional_energy")
+        # plot_cumulative_contribution(eigvecs)
         plt.show()
 
     return adata
@@ -126,9 +125,9 @@ def parse_args():
         help="Spatial platform.",
     )
     parser.add_argument(
-        "--orthogonalise",
+        "--whiten",
         action="store_true",
-        help="Orthonalise basis spatially.",
+        help="Whiten spatial eigenmodes",
     )
     parser.add_argument(
         "--plot",
@@ -143,7 +142,7 @@ def parse_args():
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Time and print each step.",
+        help="Time and print each step",
     )
     return parser.parse_args()
 
@@ -170,7 +169,7 @@ if __name__ == "__main__":
         args.components,
         args.radius,
         args.transform,
-        args.orthogonalise,
+        args.whiten,
         args.plot,
         args.lowmem,
         args.verbose,

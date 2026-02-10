@@ -129,14 +129,14 @@ if __name__ == "__main__":
         adata = sc.read_h5ad(args.input)
 
     with timed("Gene clustering", enabled=True):
-        adata.uns["gene_features"] = (adata.uns["spatial_gene_basis"].T @ adata.uns["KW"]).T
+        adata.uns["gene_features"] = (adata.uns["spatial_eigenmodes"].T @ adata.uns["KW"]).T
         adata.var["leiden"] = cluster_leiden(
             adata.uns["gene_features"], n_neighbors=args.ngenes, resolution=args.generes
         )
 
     with timed("Spot clustering", enabled=True):
         adata.obs["leiden"] = cluster_leiden(
-            adata.uns["spatial_gene_basis"], n_neighbors=args.nspots, resolution=args.spotres
+            adata.uns["spatial_eigenmodes"], n_neighbors=args.nspots, resolution=args.spotres
         )
 
     if args.output:
