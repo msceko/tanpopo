@@ -82,7 +82,25 @@ def cs_kernel(W, K):
     return G / norm
 
 
-def cs_kernel_operator(W, K, eps=1e-12, precompute_KW=True, return_KW=True):
+def cosine_norm(K, W, KW=None, eps=1e-12):
+    n_genes = W.shape[1]
+    # diag(G)_g = w_g^T K w_g
+    if KW is not None:
+        # diag is column-wise sum of elementwise product W * (K W)
+        diagG = np.asarray(W.multiply(KW).sum(axis=0)).ravel()
+    else:
+        # slower but lower memory: compute diagG gene-by-gene if needed (not recommended)
+        diagG = np.zeros(n_genes, dtype=np.float64)
+        for g in range(n_genes):
+            wg = W[:, g]
+            diagG[g] = float((wg.T @ (K @ wg)).toarray()[0, 0])
+
+    return np.sqrt(np.maximum(diagG, eps))
+
+
+def cs_kernel_operator(
+    W, K, eps=1e-12, precompute_KW=True, return_KW=True, cosine_normalisation=True
+):
     """
     Build LinearOperator A implementing y = (H C H) x without forming C or G.
     Implicit centered CS-cosine gene kernel operator for eigsh
@@ -105,18 +123,10 @@ def cs_kernel_operator(W, K, eps=1e-12, precompute_KW=True, return_KW=True):
 
     # precompute diag(G) where G = W^T K W:
     # diag(G)_g = w_g^T K w_g
-    if precompute_KW:
-        KW = K_csr @ W_csc
-        # diag is column-wise sum of elementwise product W * (K W)
-        diagG = np.asarray(W_csc.multiply(KW).sum(axis=0)).ravel()
-    else:
-        # slower but lower memory: compute diagG gene-by-gene if needed (not recommended)
-        diagG = np.zeros(n_genes, dtype=np.float64)
-        for g in range(n_genes):
-            wg = W_csc[:, g]
-            diagG[g] = float((wg.T @ (K_csr @ wg)).toarray()[0, 0])
+    KW = K_csr @ W_csc if precompute_KW or return_KW else None
 
-    d = np.sqrt(np.maximum(diagG, eps))  # cosine normalization denom per gene
+    if cosine_normalisation:
+        c = 1 / cosine_norm(K_csr, W_csc, KW, eps)
 
     def H_apply(x):
         # double-centering in feature space corresponds to Hx = x - mean(x)
@@ -128,15 +138,18 @@ def cs_kernel_operator(W, K, eps=1e-12, precompute_KW=True, return_KW=True):
         x = H_apply(x)
 
         # right cosine scaling
-        x = x / d
+        if cosine_normalisation:
+            x = x * c
 
         # y = W^T K (W x)
         u = W_csr @ x  # (spots,)
         v = K_csr @ u  # (spots,)
         y = W_csc.T @ v  # (genes,)
+        y = np.asarray(y).reshape(-1)
 
         # left cosine scaling
-        y = np.asarray(y).reshape(-1) / d
+        if cosine_normalisation:
+            y = y * c
 
         # left centering
         y = H_apply(y)

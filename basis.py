@@ -14,7 +14,7 @@ def project_spatial_basis(X, Z):
     return X @ Z
 
 
-def inv_sqrt(G, eps=1e-10):
+def inv_sqrt(G, eps=1e-12):
     """
     Compute the inverse square root of a symmetric positive semi-definite matrix.
     M^{-1/2} = U diag(1 / sqrt(evals)) U^T
