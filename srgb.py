@@ -28,10 +28,10 @@ def spatial_rkhs_gene_basis(
     precompute_KW=True,
     verbose=False,
 ):
-    X, coords, gene_names = extract_visium_data(adata, transform=transform)
+    W, coords, gene_names = extract_visium_data(adata, transform=transform)
 
     with timed("Kernel matrix", verbose):
-        W = normalise_gene_weights(X)
+        W = normalise_gene_weights(W)
         K = gaussian_kernel_sparse(coords, sigma, beta, radius)
 
     with timed("Cosine matrix", verbose):
@@ -40,7 +40,7 @@ def spatial_rkhs_gene_basis(
     with timed("Kernel PCA", verbose):
         Z, eigvals, eigvecs = kernel_pca_iterative(S, n_components)
         Z, eigvecs = orient_vectors(Z), orient_vectors(eigvecs)
-        phi = project_spatial_basis(X, eigvecs)
+        phi = project_spatial_basis(W, eigvecs)
 
     if whiten:
         phi, eigvecs = whiten_eigenmodes(phi, K, eigvecs)
@@ -58,7 +58,7 @@ def spatial_rkhs_gene_basis(
         adata.write(output)
     if plot:
         plot_spatial_basis(adata, phi)
-        # plot_spatial_basis_signed(adata, X, eigvecs)
+        # plot_spatial_basis_signed(adata, W, eigvecs)
         # plot_spatial_basis(adata, fractional_energy(phi), "fractional_energy")
         # plot_cumulative_contribution(eigvecs)
         plt.show()
