@@ -1,4 +1,6 @@
 import argparse
+import os
+import scanpy as sc
 import squidpy as sq
 import matplotlib.pyplot as plt
 
@@ -13,6 +15,32 @@ from basis import (
 )
 from plot import plot_spatial_basis, plot_spatial_basis_signed, plot_cumulative_contribution
 from utils import timed, normalise_gene_weights, print_top_genes_per_basis
+
+
+def load_data(fname, platform, verbose=False):
+    if platform == "visium":
+        if os.path.exists(fname):
+            adata = sq.read.visium(fname)
+        else:
+            adata = sq.datasets.visium(fname)
+    elif platform == "visiumhd":
+        adata = load_visium_hd(fname)
+    elif platform == "xenium":
+        if args.bin is None:
+            args.bin = args.sigma[0]
+        adata = load_xenium_binned(fname, args.bin)
+    else:
+        if os.path.exists(fname):
+            adata = sc.read_h5ad(fname)
+        else:
+            adata = getattr(sq.datasets, fname)()
+
+    adata.var_names_make_unique()
+
+    if verbose:
+        print(adata)
+
+    return adata
 
 
 def spatial_rkhs_gene_basis(
@@ -31,7 +59,7 @@ def spatial_rkhs_gene_basis(
     W, coords, gene_names = extract_visium_data(adata, transform=transform)
 
     with timed("Kernel matrix", verbose):
-        W = normalise_gene_weights(W)
+        # W = normalise_gene_weights(W)
         K = gaussian_kernel_sparse(coords, sigma, beta, radius)
 
     with timed("Cosine matrix", verbose):
@@ -121,7 +149,6 @@ def parse_args():
         "--platform",
         type=str,
         choices=["visium", "visiumhd", "xenium"],
-        default="visium",
         help="Spatial platform.",
     )
     parser.add_argument(
@@ -151,15 +178,7 @@ if __name__ == "__main__":
     args = parse_args()
 
     with timed("Loading data", args.verbose):
-        if args.platform == "visium":
-            adata = sq.read.visium(args.input)
-        elif args.platform == "visiumhd":
-            adata = load_visium_hd(args.input)
-        else:
-            if args.bin is None:
-                args.bin = args.sigma[0]
-            adata = load_xenium_binned(args.input, args.bin)
-        adata.var_names_make_unique()
+        adata = load_data(args.input, args.platform, args.verbose)
 
     adata = spatial_rkhs_gene_basis(
         adata,
