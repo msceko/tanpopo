@@ -18,9 +18,7 @@ def gaussian_kernel(coords, sigma):
     return np.exp(-d2 / (4 * sigma**2))
 
 
-def gaussian_kernel_sparse(
-    coords, sigma, beta=None, radius=None, symmetrize=True, normalise_mass=True
-):
+def gaussian_kernel_sparse(coords, sigma, radius=None, symmetrize=True):
     """
     Build a sparse nearest neighbour Gaussian kernel K (CSR) on spot coordinates.
 
@@ -35,27 +33,16 @@ def gaussian_kernel_sparse(
     Returns:
         K: scipy.sparse.csr_matrix shape (spots, spots)
     """
-    sigma = np.asarray(make_iterable(sigma))
-    if beta is None:
-        beta = np.ones_like(sigma)
-    else:
-        beta = np.asarray(make_iterable(beta))
-    beta = beta / beta.sum()
     if radius is None:
-        radius = 3.0 * max(sigma)
+        radius = 3.0 * sigma
+    radius = float(radius)
 
     nn = NearestNeighbors(radius=radius, algorithm="ball_tree", metric="euclidean")
     nn.fit(coords)
     D = nn.radius_neighbors_graph(coords, mode="distance")  # CSR
 
-    K = sp.csr_matrix(D.shape, dtype=np.float64)
-    for s, b in zip(sigma, beta):
-        Ks = D.copy()
-        Ks.data = np.exp(-(D.data**2) / (4 * s**2))
-        if normalise_mass:
-            Ks = Ks / Ks.sum()
-        K = K + Ks.multiply(b)
-
+    K = D
+    K.data = np.exp(-(D.data**2) / (4 * sigma**2))
     if symmetrize:
         K = 0.5 * (K + K.T)
     K.eliminate_zeros()
@@ -82,25 +69,13 @@ def cs_kernel(W, K):
     return G / norm
 
 
-def cosine_norm(K, W, KW=None, eps=1e-12):
-    n_genes = W.shape[1]
+def cosine_norm(W, KW=None, eps=1e-12):
     # diag(G)_g = w_g^T K w_g
-    if KW is not None:
-        # diag is column-wise sum of elementwise product W * (K W)
-        diagG = np.asarray(W.multiply(KW).sum(axis=0)).ravel()
-    else:
-        # slower but lower memory: compute diagG gene-by-gene if needed (not recommended)
-        diagG = np.zeros(n_genes, dtype=np.float64)
-        for g in range(n_genes):
-            wg = W[:, g]
-            diagG[g] = float((wg.T @ (K @ wg)).toarray()[0, 0])
-
+    diagG = np.asarray(W.multiply(KW).sum(axis=0)).ravel()
     return np.sqrt(np.maximum(diagG, eps))
 
 
-def cs_kernel_operator(
-    W, K, eps=1e-12, precompute_KW=True, return_KW=True, cosine_normalisation=True
-):
+def cs_kernel_operator(W, K, eps=1e-12):
     """
     Build LinearOperator A implementing y = (H C H) x without forming C or G.
     Implicit centered CS-cosine gene kernel operator for eigsh
@@ -123,10 +98,8 @@ def cs_kernel_operator(
 
     # precompute diag(G) where G = W^T K W:
     # diag(G)_g = w_g^T K w_g
-    KW = K_csr @ W_csc if precompute_KW or return_KW else None
-
-    if cosine_normalisation:
-        c = 1 / cosine_norm(K_csr, W_csc, KW, eps)
+    KW = K_csr @ W_csc
+    c = 1 / cosine_norm(W_csc, KW, eps)
 
     def H_apply(x):
         # double-centering in feature space corresponds to Hx = x - mean(x)
@@ -138,8 +111,7 @@ def cs_kernel_operator(
         x = H_apply(x)
 
         # right cosine scaling
-        if cosine_normalisation:
-            x = x * c
+        x = x * c
 
         # y = W^T K (W x)
         u = W_csr @ x  # (spots,)
@@ -148,8 +120,7 @@ def cs_kernel_operator(
         y = np.asarray(y).reshape(-1)
 
         # left cosine scaling
-        if cosine_normalisation:
-            y = y * c
+        y = y * c
 
         # left centering
         y = H_apply(y)
@@ -157,9 +128,7 @@ def cs_kernel_operator(
 
     A = LinearOperator((n_genes, n_genes), matvec=matvec, dtype=np.float64)
 
-    if return_KW:
-        return A, KW
-    return A
+    return A, KW
 
 
 def cs_divergence(S):

@@ -47,23 +47,21 @@ def spatial_rkhs_gene_basis(
     adata,
     output,
     sigma,
-    beta,
     n_components,
     radius,
     transform,
     whiten,
     plot,
-    precompute_KW=True,
     verbose=False,
 ):
     W, coords, gene_names = extract_visium_data(adata, transform=transform)
 
     with timed("Kernel matrix", verbose):
         # W = normalise_gene_weights(W)
-        K = gaussian_kernel_sparse(coords, sigma, beta, radius)
+        K = gaussian_kernel_sparse(coords, sigma, radius)
 
     with timed("Cosine matrix", verbose):
-        S, KW = cs_kernel_operator(W, K, precompute_KW=precompute_KW)
+        S, KW = cs_kernel_operator(W, K)
 
     with timed("Kernel PCA", verbose):
         Z, eigvals, eigvecs = kernel_pca_iterative(S, n_components)
@@ -113,15 +111,7 @@ def parse_args():
         "-s",
         "--sigma",
         type=float,
-        nargs="+",
         help="Standard deviation of Gaussian kernel",
-    )
-    parser.add_argument(
-        "-b",
-        "--beta",
-        type=float,
-        nargs="+",
-        help="Scaling factors for each sigma",
     )
     parser.add_argument(
         "--components",
@@ -162,11 +152,6 @@ def parse_args():
         help="Plot spatial gene basis",
     )
     parser.add_argument(
-        "--lowmem",
-        action="store_false",
-        help="Low memory kernel construction (slower)",
-    )
-    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Time and print each step",
@@ -184,12 +169,10 @@ if __name__ == "__main__":
         adata,
         args.output,
         args.sigma,
-        args.beta,
         args.components,
         args.radius,
         args.transform,
         args.whiten,
         args.plot,
-        args.lowmem,
         args.verbose,
     )
