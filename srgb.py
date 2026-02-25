@@ -5,7 +5,7 @@ import squidpy as sq
 import matplotlib.pyplot as plt
 
 from data import extract_visium_data, load_visium_hd, load_xenium_binned
-from kernel import gaussian_kernel_sparse, cs_kernel_operator
+from kernel import kernel_matrix_sparse, cs_kernel_operator
 from kpca import kernel_pca_iterative
 from basis import (
     project_spatial_basis,
@@ -57,8 +57,7 @@ def spatial_rkhs_gene_basis(
     W, coords, gene_names = extract_visium_data(adata, transform=transform)
 
     with timed("Kernel matrix", verbose):
-        # W = normalise_gene_weights(W)
-        K = gaussian_kernel_sparse(coords, sigma, radius)
+        K = kernel_matrix_sparse(coords, sigma, radius)
 
     with timed("Cosine matrix", verbose):
         S, KW = cs_kernel_operator(W, K)

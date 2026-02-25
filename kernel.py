@@ -4,8 +4,6 @@ from scipy.sparse.linalg import LinearOperator
 from scipy.spatial.distance import cdist
 from sklearn.neighbors import NearestNeighbors
 
-from utils import make_iterable
-
 
 def gaussian_kernel(coords, sigma):
     """
@@ -18,33 +16,41 @@ def gaussian_kernel(coords, sigma):
     return np.exp(-d2 / (4 * sigma**2))
 
 
-def gaussian_kernel_sparse(coords, sigma, radius=None, symmetrize=True):
+def wendland_c2(r):
     """
-    Build a sparse nearest neighbour Gaussian kernel K (CSR) on spot coordinates.
+    Wendland C^2 (compactly supported, PSD in R^d for d <= 3):
+      phi(r) = (1 - r)^4_+ * (4r + 1),  r >= 0
+    """
+    r = np.asarray(r, dtype=np.float64)
+    t = np.maximum(1.0 - r, 0.0)
+    return (t**4) * (4.0 * r + 1.0)
 
-    K_ij = exp(-||xi-xj||^2 / (4*sigma^2)) for j in kNN(i)
+
+def kernel_matrix_sparse(coords, radius, symmetrize=True):
+    """
+    Build a sparse radius-neighborhood Wendland kernel K (CSR) on spot coordinates.
+
+      K_ij = phi(||xi-xj|| / ell)   for ||xi-xj|| <= radius
+      phi = Wendland C^2
 
     Args:
-        coords: (spots, 2) or (spots, d)
-        sigma: float
-        radius: range of parameter space for cutoff
-        symmetrize: make K symmetric via (K + K.T)/2 (recommended for eigensolvers)
+        coords: (n_spots, d)
+        radius: positive length-scale. Support of phi is r<=1, i.e. ||xi-xj|| <= ell.
+        symmetrize: (K + K.T)/2
 
     Returns:
-        K: scipy.sparse.csr_matrix shape (spots, spots)
+        K: scipy.sparse.csr_matrix, shape (n_spots, n_spots)
     """
-    if radius is None:
-        radius = 3.0 * sigma
-    radius = float(radius)
-
     nn = NearestNeighbors(radius=radius, algorithm="ball_tree", metric="euclidean")
     nn.fit(coords)
-    D = nn.radius_neighbors_graph(coords, mode="distance")  # CSR
 
-    K = D
-    K.data = np.exp(-(D.data**2) / (4 * sigma**2))
+    K = nn.radius_neighbors_graph(coords, mode="distance")  # CSR
+    K.data = wendland_c2(K.data / radius)
+
     if symmetrize:
-        K = 0.5 * (K + K.T)
+        Kt = K.T.tocsr()
+        K = K.maximum(Kt)
+
     K.eliminate_zeros()
 
     return K
