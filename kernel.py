@@ -56,7 +56,7 @@ def kernel_matrix_sparse(coords, radius, symmetrize=True):
     return K
 
 
-def cs_kernel(W, K):
+def cosine_kernel(W, K):
     """
     ⟨p_i, p_j⟩ = w_i^T K w_j
 
@@ -75,66 +75,137 @@ def cs_kernel(W, K):
     return G / norm
 
 
-def cosine_norm(W, KW=None, eps=1e-12):
-    # diag(G)_g = w_g^T K w_g
-    diagG = np.asarray(W.multiply(KW).sum(axis=0)).ravel()
-    return np.sqrt(np.maximum(diagG, eps))
-
-
-def cs_kernel_operator(W, K, eps=1e-12):
+def cosine_kernel_operator(
+    W,
+    K,
+    *,
+    spot_center=True,
+    gene_center=True,
+    cosine_normalise=True,
+    eps=1e-12,
+    dtype=np.float64,
+):
     """
-    Build LinearOperator A implementing y = (H C H) x without forming C or G.
-    Implicit centered CS-cosine gene kernel operator for eigsh
-    C = D^{-1} (W^T K W) D^{-1}, then A = H C H
+    Build LinearOperator A implementing y = (H_g) * (C) * (H_g) x, where:
 
-    Assumes:
-      - W is sparse (CSC/CSR), shape (spots, genes)
-      - K is sparse CSR/CSC, shape (spots, spots), symmetric recommended
+      - Optional spot-RKHS centering:
+            Kc = H_n K H_n,   H_n = I_n - (1/n) 11^T
+        If spot_center=False, Kc = K.
+
+      - Optional cosine normalization:
+            G  = W^T Kc W
+            C  = D^{-1} G D^{-1},   D_gg = sqrt(G_gg)
+        If cosine_normalize=False, C = G.
+
+      - Optional gene centering (applied left and right):
+            H_g = I_p - (1/p) 11^T
+        If gene_center=False, H_g = I_p.
+
+    The operator is applied without explicitly forming G or C.
+
+    Args:
+        W: (n_spots, n_genes) sparse matrix (CSR/CSC ok).
+        K: (n_spots, n_spots) sparse matrix (CSR/CSC ok). Symmetric recommended.
+        spot_center: apply spot centering in RKHS (H_n K H_n).
+        gene_center: apply gene centering (H_g * ... * H_g).
+        cosine_normalize: apply cosine normalization in gene-RKHS induced by Kc.
+        eps: floor for diagonal in cosine normalization.
+        dtype: numerical dtype.
 
     Returns:
-      A: LinearOperator (genes, genes)
-      d: (genes,) sqrt(diag(W^T K W)) used for cosine normalization
+        A: LinearOperator (n_genes, n_genes)
+        info: dict with diagnostics (e.g., diagG, scaling c, etc.)
     """
-    n_genes = W.shape[1]
-
-    # W as CSC for fast W.T @ v, and CSR for fast W @ x
+    n_spots, n_genes = W.shape
     W_csc = W.tocsc(copy=False)
     W_csr = W.tocsr(copy=False)
     K_csr = K.tocsr(copy=False)
 
-    # precompute diag(G) where G = W^T K W:
-    # diag(G)_g = w_g^T K w_g
-    KW = K_csr @ W_csc
-    c = 1 / cosine_norm(W_csc, KW, eps)
+    def H_spots(u):
+        # center over spots
+        return u - u.mean()
 
-    def H_apply(x):
-        # double-centering in feature space corresponds to Hx = x - mean(x)
-        return x - np.mean(x)
+    def H_genes(x):
+        # center over genes
+        return x - x.mean()
+
+    def Kc_apply(u):
+        # Apply Kc = (H_n K H_n) if spot_center else K
+        if not spot_center:
+            return K_csr @ u
+        u1 = H_spots(u)
+        v = K_csr @ u1
+        return H_spots(v)
+
+    if cosine_normalise:
+        ones = np.ones(n_spots, dtype=dtype)
+
+        # If spot_center=True, we need diag(W^T (H K H) W)
+        # Use: (w - m1)^T K (w - m1) = w^T K w - 2m (w^T K1) + m^2 (1^T K1)
+        # with m = mean(w). This avoids explicitly constructing Kc.
+        K1 = K_csr @ ones
+        s11 = float(ones @ K1)
+
+        # KW = K @ W  (used for w^T K w)
+        KW = K_csr @ W_csc
+
+        wTKw = np.asarray(W_csc.multiply(KW).sum(axis=0)).ravel().astype(dtype)
+
+        if spot_center:
+            colsumW = np.asarray(W_csc.sum(axis=0)).ravel().astype(dtype)
+            meanW = colsumW / float(n_spots)
+            wTK1 = np.asarray(W_csc.T @ K1).ravel().astype(dtype)
+            diagG = wTKw - 2.0 * meanW * wTK1 + (meanW**2) * s11
+        else:
+            diagG = wTKw
+
+        diagG = np.maximum(diagG, eps)
+        c = 1.0 / np.sqrt(diagG)  # elementwise
+    else:
+        diagG = None
+        c = None
 
     def matvec(x):
-        x = np.asarray(x, dtype=np.float64).reshape(-1)
-        # right centering
-        x = H_apply(x)
+        x = np.asarray(x, dtype=dtype).reshape(-1)
+
+        # right gene-centering
+        if gene_center:
+            x = H_genes(x)
 
         # right cosine scaling
-        x = x * c
+        if cosine_normalise:
+            x = x * c
 
-        # y = W^T K (W x)
-        u = W_csr @ x  # (spots,)
-        v = K_csr @ u  # (spots,)
-        y = W_csc.T @ v  # (genes,)
+        # u = W x  (spots)
+        u = W_csr @ x
+
+        # v = Kc u  (spots), optionally centered in spot RKHS
+        v = Kc_apply(u)
+
+        # y = W^T v (genes)
+        y = W_csc.T @ v
         y = np.asarray(y).reshape(-1)
 
         # left cosine scaling
-        y = y * c
+        if cosine_normalise:
+            y = y * c
 
-        # left centering
-        y = H_apply(y)
+        # left gene-centering
+        if gene_center:
+            y = H_genes(y)
+
         return y
 
-    A = LinearOperator((n_genes, n_genes), matvec=matvec, dtype=np.float64)
+    A = LinearOperator((n_genes, n_genes), matvec=matvec, dtype=dtype)
 
-    return A, KW
+    info = {
+        "spot_center": spot_center,
+        "gene_center": gene_center,
+        "cosine_normalize": cosine_normalise,
+        "diagG": diagG,  # diag of G or centered G (if cosine_normalize)
+        "c": c,  # cosine scaling (if cosine_normalize)
+    }
+    return A
 
 
 def cs_divergence(S):
