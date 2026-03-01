@@ -8,6 +8,15 @@ from basis import project_spatial_basis
 from utils import cumulative_contribution
 
 
+def spatial_scatter(adata, keys):
+    n_cols = int(np.round(4 / 3 * np.sqrt(len(keys))))
+    axs = sc.pl.embedding(
+        adata, basis="spatial", color=keys, ncols=n_cols, cmap="PiYG", frameon=False, show=False
+    )
+    for ax in axs:
+        ax.invert_yaxis()
+
+
 def plot_spatial_basis(adata, phi, prefix="spatial_basis"):
     """Plot spatial gene basis"""
     keys = []
@@ -15,7 +24,7 @@ def plot_spatial_basis(adata, phi, prefix="spatial_basis"):
         keys.append(f"{prefix}_{k}")
         adata.obs[keys[k]] = phi[:, k]
 
-    sq.pl.spatial_scatter(adata, color=keys, img=None)
+    spatial_scatter(adata, keys)
 
 
 def plot_spatial_basis_signed(adata, X, eigvecs):
@@ -34,7 +43,7 @@ def plot_gene_clusters(adata, key="leiden"):
         genes = (adata.var[key] == cluster).tolist()
         adata.obs[keys[cluster]] = np.asarray(adata.X[:, genes].sum(axis=1)).ravel()
 
-    sq.pl.spatial_scatter(adata, color=keys, img=None)
+    spatial_scatter(adata, keys)
 
 
 def plot_cumulative_contribution(eigvecs):
