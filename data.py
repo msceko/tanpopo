@@ -10,7 +10,13 @@ from matplotlib.image import imread
 
 
 def extract_visium_data(
-    adata, normalise=True, transform=None, layer=None, min_counts=10, sparse=True
+    adata,
+    normalise=True,
+    transform=None,
+    layer=None,
+    min_counts=10,
+    min_spot_fraction=0.05,
+    sparse=True,
 ):
     """
     Returns:
@@ -19,7 +25,8 @@ def extract_visium_data(
         gene_names
     """
     sc.pp.filter_genes(adata, min_counts=min_counts)
-    # gene_mask = (adata.X.toarray() > 0).mean(axis=0) >= 0.05
+    min_spots = int(min_spot_fraction * len(adata.obs))
+    sc.pp.filter_genes(adata, min_cells=min_spots)
 
     if normalise:
         sc.pp.normalize_total(adata, target_sum=1e4)
