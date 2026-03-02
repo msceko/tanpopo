@@ -11,13 +11,26 @@ from utils import cumulative_contribution
 def spatial_scatter(adata, keys):
     n_cols = int(np.round(4 / 3 * np.sqrt(len(keys))))
     axs = sc.pl.embedding(
-        adata, basis="spatial", color=keys, ncols=n_cols, cmap="PiYG", frameon=False, show=False
+        adata,
+        basis="spatial",
+        color=keys,
+        ncols=n_cols,
+        cmap="PiYG",
+        vcenter=0,
+        wspace=0,
+        hspace=0,
+        colorbar_loc=None,
+        title=len(keys) * [""],
+        frameon=False,
+        show=False,
     )
-    for ax in axs:
+    for i, ax in enumerate(axs):
         ax.invert_yaxis()
+        ax.axis("equal")
+        ax.text(0.05, 0.95, f"{i}.", transform=ax.transAxes, ha="left", va="top", fontsize=12)
 
 
-def plot_spatial_basis(adata, phi, prefix="spatial_basis"):
+def plot_spatial_basis(adata, phi, prefix="spatial_mode"):
     """Plot spatial gene basis"""
     keys = []
     for k in range(phi.shape[1]):
@@ -30,9 +43,9 @@ def plot_spatial_basis(adata, phi, prefix="spatial_basis"):
 def plot_spatial_basis_signed(adata, X, eigvecs):
     """Plot positive and negative components of gene basis independently"""
     phi_pos = project_spatial_basis(X, np.maximum(eigvecs, 0))
-    plot_spatial_basis(adata, phi_pos, "spatial_basis_positive")
+    plot_spatial_basis(adata, phi_pos, "spatial_mode_positive")
     phi_neg = project_spatial_basis(X, np.maximum(-eigvecs, 0))
-    plot_spatial_basis(adata, phi_neg, "spatial_basis_negative")
+    plot_spatial_basis(adata, phi_neg, "spatial_mode_negative")
 
 
 def plot_gene_clusters(adata, key="leiden"):
