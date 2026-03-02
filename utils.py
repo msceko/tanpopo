@@ -34,6 +34,16 @@ def make_iterable(obj):
     return [obj]
 
 
+def str2bool(arg):
+    ua = str(arg).upper()
+    if "TRUE".startswith(ua):
+        return True
+    elif "FALSE".startswith(ua):
+        return False
+    else:
+        raise ValueError("Argument must be 'True' or 'False'")
+
+
 def normalise_gene_weights(X):
     """Normalise columns to sum to 1"""
     return normalize(X, norm="l1", axis=0)

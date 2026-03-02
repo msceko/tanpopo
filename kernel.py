@@ -78,7 +78,6 @@ def cosine_kernel(W, K):
 def cosine_kernel_operator(
     W,
     K,
-    *,
     spot_center=True,
     gene_center=True,
     cosine_normalise=True,

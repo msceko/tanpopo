@@ -14,7 +14,7 @@ from basis import (
     fractional_energy,
 )
 from plot import plot_spatial_basis, plot_spatial_basis_signed, plot_cumulative_contribution
-from utils import timed, normalise_gene_weights, print_top_genes_per_basis
+from utils import timed, str2bool, normalise_gene_weights, print_top_genes_per_basis
 
 
 def load_data(fname, platform, verbose=False):
@@ -50,6 +50,9 @@ def spatial_rkhs_gene_basis(
     n_components,
     radius,
     transform,
+    spot_center,
+    gene_center,
+    cosine_normalise,
     whiten,
     plot,
     verbose=False,
@@ -60,7 +63,7 @@ def spatial_rkhs_gene_basis(
         K = kernel_matrix_sparse(coords, sigma, radius)
 
     with timed("Cosine matrix", verbose):
-        S = cosine_kernel_operator(W, K, spot_center=True, gene_center=True, cosine_normalise=True)
+        S = cosine_kernel_operator(W, K, spot_center, gene_center, cosine_normalise)
 
     with timed("Kernel PCA", verbose):
         Z, eigvals, eigvecs = kernel_pca_iterative(S, n_components)
@@ -140,6 +143,25 @@ def parse_args():
         help="Spatial platform.",
     )
     parser.add_argument(
+        "--spotcenter",
+        type=str,
+        choices=["True", "False"],
+        default="True",
+        help="Center spatial kernel.",
+    )
+    parser.add_argument(
+        "--genecenter",
+        choices=["True", "False"],
+        default="True",
+        help="Center gene weights.",
+    )
+    parser.add_argument(
+        "--normalise",
+        choices=["True", "False"],
+        default="True",
+        help="Apply cosine normalisation to Gram matrix.",
+    )
+    parser.add_argument(
         "--whiten",
         action="store_true",
         help="Whiten spatial eigenmodes",
@@ -170,6 +192,9 @@ if __name__ == "__main__":
         args.components,
         args.radius,
         args.transform,
+        str2bool(args.spotcenter),
+        str2bool(args.genecenter),
+        str2bool(args.normalise),
         args.whiten,
         args.plot,
         args.verbose,
