@@ -114,6 +114,11 @@ def argtop(v, n_top, mode):
     return idx[:n_top]
 
 
+def top_genes(scores, genes, n_top, mode="pos"):
+    idx = argtop(scores, n_top, mode)
+    return list(genes[idx]), list(scores[idx])
+
+
 def top_genes_per_basis(eigvecs, genes, n_top, mode="abs"):
     """Compute top genes for each gene basis"""
     top_genes = []
@@ -121,6 +126,12 @@ def top_genes_per_basis(eigvecs, genes, n_top, mode="abs"):
         idx = argtop(eigvecs[:, k], n_top, mode)
         top_genes.append({genes[i]: eigvecs[i, k] for i in idx})
     return top_genes
+
+
+def print_top_genes(scores, genes, n_top):
+    top_genes, top_scores = top_genes(scores, genes, n_top)
+    for gene, score in zip(top_genes, top_scores):
+        print(f"{gene:15s} {score:+.3f}")
 
 
 def print_top_genes_per_basis(eigvecs, eigvals, genes, n_top=8):

@@ -55,5 +55,13 @@ def orient_vectors(V):
 
 
 def fractional_energy(phi, eps=1e-12):
+    """Return fractional energy for each eigenmode"""
     E = phi**2
     return E / (E.sum(axis=1, keepdims=True) + eps)
+
+
+def gene_loading_mass(eigvecs, eigvals=None):
+    """Captured gene loading mass - optionally weighted by eigenvalues"""
+    if eigvals is not None:
+        return (eigvals * eigvecs**2).sum(1)
+    return (eigvecs**2).sum(1)
