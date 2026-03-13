@@ -49,6 +49,12 @@ def normalise_gene_weights(X):
     return normalize(X, norm="l1", axis=0)
 
 
+def quad_form(applyS, a):
+    """Compute a^T S a using only S@a."""
+    Sa = applyS(a.reshape(-1, 1)).ravel()
+    return float(a @ Sa)
+
+
 def bin_spatial_basis(
     adata,
     prefix="spatial_basis_",

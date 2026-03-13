@@ -1,6 +1,8 @@
 import numpy as np
 from scipy.linalg import eigh
 
+from utils import quad_form
+
 
 def project_spatial_basis(X, Z):
     """
@@ -65,3 +67,69 @@ def gene_loading_mass(eigvecs, eigvals=None):
     if eigvals is not None:
         return (eigvals * eigvecs**2).sum(1)
     return (eigvecs**2).sum(1)
+
+
+def split_mode_contributions(S, eigvals, eigvecs, use_overlap_penalty=False, eps=1e-12):
+    """
+    Rank split halves of KPCA modes.
+
+    S: function (p,r)->(p,r) computing S@X (S = W^T K W or cosine-normalized C)
+    eigvals: (m,)
+    eigvecs: (p,m)
+
+    Returns list of dicts with per-half contributions.
+    """
+    out = []
+    m = eigvecs.shape[1]
+    for k in range(m):
+        lam = float(eigvals[k])
+        v = eigvecs[:, k]
+        vp = np.maximum(v, 0.0)
+        vn = np.maximum(-v, 0.0)
+
+        Ep = quad_form(S, vp) if vp.any() else 0.0
+        En = quad_form(S, vn) if vn.any() else 0.0
+
+        if use_overlap_penalty and vp.any() and vn.any():
+            # overlap = vp^T S vn
+            Svn = S(vn.reshape(-1, 1)).ravel()
+            overlap = float(vp @ Svn)
+            Ep_eff = max(Ep - overlap, 0.0)
+            En_eff = max(En - overlap, 0.0)
+            denom = max(Ep_eff + En_eff, eps)
+            cp = lam * Ep_eff / denom
+            cn = lam * En_eff / denom
+        else:
+            denom = max(Ep + En, eps)
+            cp = lam * Ep / denom
+            cn = lam * En / denom
+
+        Svn = S(vn.reshape(-1, 1)).ravel()
+        overlap = float(vp @ Svn)
+
+        out.append(
+            {
+                "v": vp,
+                "mode": k,
+                "half": "+",
+                "lambda": lam,
+                "E": Ep,
+                "contrib": cp,
+                "overlap": overlap,
+            }
+        )
+        out.append(
+            {
+                "v": vn,
+                "mode": k,
+                "half": "-",
+                "lambda": lam,
+                "E": En,
+                "contrib": cn,
+                "overlap": overlap,
+            }
+        )
+
+    # sort by contribution
+    out.sort(key=lambda d: d["contrib"], reverse=True)
+    return out

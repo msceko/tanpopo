@@ -8,21 +8,20 @@ from basis import project_spatial_basis
 from utils import cumulative_contribution
 
 
-def spatial_scatter(adata, keys):
+def spatial_scatter(adata, keys, **kwargs):
     n_cols = int(np.round(4 / 3 * np.sqrt(len(keys))))
     axs = sc.pl.embedding(
         adata,
         basis="spatial",
         color=keys,
         ncols=n_cols,
-        cmap="PiYG",
-        vcenter=0,
         wspace=0,
         hspace=0,
         colorbar_loc=None,
         title=len(keys) * [""],
         frameon=False,
         show=False,
+        **kwargs,
     )
     for i, ax in enumerate(axs):
         ax.invert_yaxis()
@@ -30,14 +29,14 @@ def spatial_scatter(adata, keys):
         ax.text(0.05, 0.95, f"{i}.", transform=ax.transAxes, ha="left", va="top", fontsize=12)
 
 
-def plot_spatial_basis(adata, phi, prefix="spatial_mode"):
+def plot_spatial_basis(adata, phi, prefix="spatial_mode", **kwargs):
     """Plot spatial gene basis"""
     keys = []
     for k in range(phi.shape[1]):
         keys.append(f"{prefix}_{k}")
         adata.obs[keys[k]] = phi[:, k]
 
-    spatial_scatter(adata, keys)
+    spatial_scatter(adata, keys, **kwargs)
 
 
 def plot_spatial_basis_signed(adata, X, eigvecs):
