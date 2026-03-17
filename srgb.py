@@ -30,7 +30,7 @@ def load_data(fname, platform, verbose=False):
         adata = load_visium_hd(fname)
     elif platform == "xenium":
         if args.bin is None:
-            args.bin = args.sigma[0]
+            args.bin = args.radius / 3
         adata = load_xenium_binned(fname, args.bin)
     else:
         if os.path.exists(fname):
@@ -49,7 +49,6 @@ def load_data(fname, platform, verbose=False):
 def spatial_rkhs_gene_basis(
     adata,
     output,
-    sigma,
     n_components,
     radius,
     transform,
@@ -64,7 +63,7 @@ def spatial_rkhs_gene_basis(
     W, coords, gene_names = extract_visium_data(adata, transform=transform)
 
     with timed("Kernel matrix", verbose):
-        K = kernel_matrix_sparse(coords, sigma, radius)
+        K = kernel_matrix_sparse(coords, radius)
 
     with timed("Cosine matrix", verbose):
         S = cosine_kernel_operator(W, K, spot_center, gene_center, cosine_normalise)
@@ -126,21 +125,16 @@ def parse_args():
         help="Save .h5ad-formatted hdf5 file",
     )
     parser.add_argument(
-        "-s",
-        "--sigma",
-        type=float,
-        help="Standard deviation of Gaussian kernel",
-    )
-    parser.add_argument(
         "--components",
         type=int,
         default=8,
         help="Number of spatial components",
     )
     parser.add_argument(
+        "-r",
         "--radius",
         type=float,
-        help="Radius of neighbourhood for spatial computation",
+        help="Wendland kernel support radius",
     )
     parser.add_argument(
         "--bin",
@@ -210,7 +204,6 @@ if __name__ == "__main__":
     adata = spatial_rkhs_gene_basis(
         adata,
         args.output,
-        args.sigma,
         args.components,
         args.radius,
         args.transform,

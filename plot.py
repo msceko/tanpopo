@@ -68,7 +68,7 @@ def plot_cumulative_contribution(eigvecs):
     plt.legend([f"Basis {n}" for n in range(eigvecs.shape[1])])
 
 
-def plot_umap(X, obs, obs_names, n_neighbors):
+def plot_umap(X, obs, obs_names, n_neighbors, **kwargs):
     """Plot umap embedding with cluster colours"""
     adata = ad.AnnData(X)
     adata.obs_names = obs_names
@@ -76,4 +76,4 @@ def plot_umap(X, obs, obs_names, n_neighbors):
 
     sc.pp.neighbors(adata, n_neighbors=n_neighbors, use_rep="X")
     sc.tl.umap(adata)
-    sc.pl.umap(adata, color="umap", size=20, cmap="tab20")
+    sc.pl.umap(adata, color="umap", size=20, cmap="tab20", **kwargs)
