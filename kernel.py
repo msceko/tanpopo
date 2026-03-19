@@ -166,45 +166,29 @@ def cosine_kernel_operator(
 
     def matvec(x):
         x = np.asarray(x, dtype=dtype).reshape(-1)
-
         # right gene-centering
         if gene_center:
             x = H_genes(x)
-
         # right cosine scaling
         if cosine_normalise:
             x = x * c
-
         # u = W x  (spots)
         u = W_csr @ x
-
         # v = Kc u  (spots), optionally centered in spot RKHS
         v = Kc_apply(u)
-
         # y = W^T v (genes)
         y = W_csc.T @ v
         y = np.asarray(y).reshape(-1)
-
         # left cosine scaling
         if cosine_normalise:
             y = y * c
-
         # left gene-centering
         if gene_center:
             y = H_genes(y)
 
         return y
 
-    A = LinearOperator((n_genes, n_genes), matvec=matvec, dtype=dtype)
-
-    info = {
-        "spot_center": spot_center,
-        "gene_center": gene_center,
-        "cosine_normalize": cosine_normalise,
-        "diagG": diagG,  # diag of G or centered G (if cosine_normalize)
-        "c": c,  # cosine scaling (if cosine_normalize)
-    }
-    return A
+    return LinearOperator((n_genes, n_genes), matvec=matvec, dtype=dtype)
 
 
 def cs_divergence(S):

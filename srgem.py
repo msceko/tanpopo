@@ -52,6 +52,9 @@ def spatial_rkhs_gene_basis(
     n_components,
     radius,
     transform,
+    min_counts,
+    min_spot_fraction,
+    target_sum,
     spot_center,
     gene_center,
     cosine_normalise,
@@ -60,7 +63,9 @@ def spatial_rkhs_gene_basis(
     plot,
     verbose=False,
 ):
-    W, coords, gene_names = extract_visium_data(adata, transform=transform)
+    W, coords, gene_names = extract_visium_data(
+        adata, target_sum, transform, min_counts, min_spot_fraction
+    )
 
     with timed("Kernel matrix", verbose):
         K = kernel_matrix_sparse(coords, radius)
@@ -90,10 +95,24 @@ def spatial_rkhs_gene_basis(
                     f"Non-negative eigenmode {k}: (λ{mode['half']} = {mode['contrib']:.4f}, k = {mode['mode']})"
                 )
 
-    adata.uns["spatial_gene_loadings"] = eigvecs
-    adata.uns["spatial_gene_energy"] = eigvals
-    adata.uns["spatial_gene_scores"] = Z
-    adata.uns["spatial_eigenmodes"] = phi
+    adata.uns["srgem"] = {
+        "gene_loadings": eigvecs,
+        "gene_energy": eigvals,
+        "gene_scores": Z,
+        "eigenmodes": phi,
+        "info": {
+            "target_sum": target_sum,
+            "transform": transform,
+            "min_counts": min_counts,
+            "min_spot_fraction": min_spot_fraction,
+            "kernel": "wendland_c2",
+            "radius": radius,
+            "spot_center": spot_center,
+            "gene_center": gene_center,
+            "cosine_normalize": cosine_normalise,
+            "whiten": whiten,
+        },
+    }
 
     if output:
         adata.write(output)
@@ -146,6 +165,23 @@ def parse_args():
         type=str,
         choices=["sqrt", "log1p"],
         help="Counts transform",
+    )
+    parser.add_argument(
+        "--mincounts",
+        type=int,
+        default=10,
+        help="Minimum number of counts required for a gene to pass filtering",
+    )
+    parser.add_argument(
+        "--minspots",
+        type=float,
+        help="Minimum fraction of spots required for a gene to pass filtering [0, 1]",
+    )
+    parser.add_argument(
+        "--targetsum",
+        type=int,
+        default=1e4,
+        help="Normalise each spot total to the target sum",
     )
     parser.add_argument(
         "--platform",
@@ -207,6 +243,9 @@ if __name__ == "__main__":
         args.components,
         args.radius,
         args.transform,
+        args.mincounts,
+        args.minspots,
+        args.targetsum,
         str2bool(args.spotcenter),
         str2bool(args.genecenter),
         str2bool(args.normalise),

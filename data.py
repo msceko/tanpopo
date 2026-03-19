@@ -11,11 +11,11 @@ from matplotlib.image import imread
 
 def extract_visium_data(
     adata,
-    normalise=True,
+    target_sum=1e4,
     transform=None,
-    layer=None,
     min_counts=10,
-    min_spot_fraction=0.05,
+    min_spot_fraction=0.01,
+    layer=None,
     sparse=True,
 ):
     """
@@ -24,12 +24,14 @@ def extract_visium_data(
         coords : (n_spots, 2) spatial coordinates
         gene_names
     """
-    sc.pp.filter_genes(adata, min_counts=min_counts)
-    min_spots = int(min_spot_fraction * len(adata.obs))
-    sc.pp.filter_genes(adata, min_cells=min_spots)
+    if min_counts:
+        sc.pp.filter_genes(adata, min_counts=min_counts)
+    if min_spot_fraction:
+        min_spots = int(min_spot_fraction * len(adata.obs))
+        sc.pp.filter_genes(adata, min_cells=min_spots)
 
-    if normalise:
-        sc.pp.normalize_total(adata, target_sum=1e4)
+    if target_sum:
+        sc.pp.normalize_total(adata, target_sum=target_sum)
     if transform == "log1p":
         sc.pp.log1p(adata)
     elif transform == "sqrt":

@@ -1,11 +1,10 @@
 import anndata as ad
 import numpy as np
 import scanpy as sc
-import squidpy as sq
 import matplotlib.pyplot as plt
 
 from basis import project_spatial_basis
-from utils import cumulative_contribution
+from utils import make_iterable, cumulative_contribution
 
 
 def spatial_scatter(adata, keys, **kwargs):
@@ -23,7 +22,7 @@ def spatial_scatter(adata, keys, **kwargs):
         show=False,
         **kwargs,
     )
-    for i, ax in enumerate(axs):
+    for i, ax in enumerate(make_iterable(axs)):
         ax.invert_yaxis()
         ax.axis("equal")
         ax.text(0.05, 0.95, f"{i}.", transform=ax.transAxes, ha="left", va="top", fontsize=12)
