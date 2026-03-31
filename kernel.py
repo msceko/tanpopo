@@ -75,9 +75,38 @@ def cosine_kernel(W, K):
     return G / norm
 
 
+def calculate_diagG(K_csr, W_csc, spot_center, eps=1e-12, dtype=np.float64):
+    """
+    If spot_center=True, we need diag(W^T (H K H) W)
+    Use: (w - m1)^T K (w - m1) = w^T K w - 2m (w^T K1) + m^2 (1^T K1)
+    with m = mean(w). This avoids explicitly constructing Kc.
+    """
+    n_spots = W_csc.shape[0]
+    ones = np.ones(n_spots, dtype=dtype)
+
+    K1 = K_csr @ ones
+    s11 = float(ones @ K1)
+
+    # KW = K @ W  (used for w^T K w)
+    KW = K_csr @ W_csc
+
+    wTKw = np.asarray(W_csc.multiply(KW).sum(axis=0)).ravel().astype(dtype)
+
+    if spot_center:
+        colsumW = np.asarray(W_csc.sum(axis=0)).ravel().astype(dtype)
+        meanW = colsumW / float(n_spots)
+        wTK1 = np.asarray(W_csc.T @ K1).ravel().astype(dtype)
+        diagG = wTKw - 2.0 * meanW * wTK1 + (meanW**2) * s11
+    else:
+        diagG = wTKw
+
+    return np.maximum(diagG, eps)
+
+
 def cosine_kernel_operator(
     W,
     K,
+    alpha=0.5,
     spot_center=True,
     gene_center=True,
     cosine_normalise=True,
@@ -115,10 +144,17 @@ def cosine_kernel_operator(
         A: LinearOperator (n_genes, n_genes)
         info: dict with diagnostics (e.g., diagG, scaling c, etc.)
     """
-    n_spots, n_genes = W.shape
+    n_genes = W.shape[1]
     W_csc = W.tocsc(copy=False)
     W_csr = W.tocsr(copy=False)
     K_csr = K.tocsr(copy=False)
+
+    if cosine_normalise:
+        diagG = calculate_diagG(K_csr, W_csc, spot_center, eps, dtype)
+        c = diagG ** (-0.5 * alpha)
+    else:
+        diagG = None
+        c = None
 
     def H_spots(u):
         # center over spots
@@ -135,34 +171,6 @@ def cosine_kernel_operator(
         u1 = H_spots(u)
         v = K_csr @ u1
         return H_spots(v)
-
-    if cosine_normalise:
-        ones = np.ones(n_spots, dtype=dtype)
-
-        # If spot_center=True, we need diag(W^T (H K H) W)
-        # Use: (w - m1)^T K (w - m1) = w^T K w - 2m (w^T K1) + m^2 (1^T K1)
-        # with m = mean(w). This avoids explicitly constructing Kc.
-        K1 = K_csr @ ones
-        s11 = float(ones @ K1)
-
-        # KW = K @ W  (used for w^T K w)
-        KW = K_csr @ W_csc
-
-        wTKw = np.asarray(W_csc.multiply(KW).sum(axis=0)).ravel().astype(dtype)
-
-        if spot_center:
-            colsumW = np.asarray(W_csc.sum(axis=0)).ravel().astype(dtype)
-            meanW = colsumW / float(n_spots)
-            wTK1 = np.asarray(W_csc.T @ K1).ravel().astype(dtype)
-            diagG = wTKw - 2.0 * meanW * wTK1 + (meanW**2) * s11
-        else:
-            diagG = wTKw
-
-        diagG = np.maximum(diagG, eps)
-        c = 1.0 / np.sqrt(diagG)  # elementwise
-    else:
-        diagG = None
-        c = None
 
     def matvec(x):
         x = np.asarray(x, dtype=dtype).reshape(-1)

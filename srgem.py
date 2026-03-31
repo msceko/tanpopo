@@ -55,6 +55,7 @@ def spatial_rkhs_gene_basis(
     min_counts,
     min_spot_fraction,
     target_sum,
+    alpha,
     spot_center,
     gene_center,
     cosine_normalise,
@@ -71,7 +72,7 @@ def spatial_rkhs_gene_basis(
         K = kernel_matrix_sparse(coords, radius)
 
     with timed("Cosine matrix", verbose):
-        S = cosine_kernel_operator(W, K, spot_center, gene_center, cosine_normalise)
+        S = cosine_kernel_operator(W, K, alpha, spot_center, gene_center, cosine_normalise)
 
     with timed("Kernel PCA", verbose):
         Z, eigvals, eigvecs = kernel_pca_iterative(S, n_components)
@@ -190,6 +191,12 @@ def parse_args():
         help="Spatial platform.",
     )
     parser.add_argument(
+        "--alpha",
+        type=float,
+        default=1.0,
+        help="Gene magnitude scaling - uses the operator D^{-alpha} G D^{-alpha}",
+    )
+    parser.add_argument(
         "--spotcenter",
         type=str,
         choices=["True", "False"],
@@ -246,6 +253,7 @@ if __name__ == "__main__":
         args.mincounts,
         args.minspots,
         args.targetsum,
+        args.alpha,
         str2bool(args.spotcenter),
         str2bool(args.genecenter),
         str2bool(args.normalise),
