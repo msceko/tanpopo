@@ -8,7 +8,7 @@ from utils import make_iterable, cumulative_contribution
 
 
 def spatial_scatter(adata, keys, **kwargs):
-    n_cols = int(np.round(4 / 3 * np.sqrt(len(keys))))
+    n_cols = int(np.round(5 / 3 * np.sqrt(len(keys))))
     axs = sc.pl.embedding(
         adata,
         basis="spatial",
@@ -26,6 +26,7 @@ def spatial_scatter(adata, keys, **kwargs):
         ax.invert_yaxis()
         ax.axis("equal")
         ax.text(0.05, 0.95, f"{i}.", transform=ax.transAxes, ha="left", va="top", fontsize=12)
+        ax.axis("off")
 
 
 def plot_spatial_basis(adata, phi, prefix="spatial_mode", **kwargs):
@@ -67,12 +68,12 @@ def plot_cumulative_contribution(eigvecs):
     plt.legend([f"Basis {n}" for n in range(eigvecs.shape[1])])
 
 
-def plot_umap(X, obs, obs_names, n_neighbors, **kwargs):
+def plot_umap(X, obs, obs_names, n_neighbors, min_dist=0.1, spread=1.0, **kwargs):
     """Plot umap embedding with cluster colours"""
     adata = ad.AnnData(X)
     adata.obs_names = obs_names
     adata.obs["umap"] = obs
 
     sc.pp.neighbors(adata, n_neighbors=n_neighbors, use_rep="X")
-    sc.tl.umap(adata)
+    sc.tl.umap(adata, min_dist=min_dist, spread=spread)
     sc.pl.umap(adata, color="umap", size=20, cmap="tab20", **kwargs)
