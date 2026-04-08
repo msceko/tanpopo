@@ -1,26 +1,17 @@
 import argparse
 import os
 
-import numpy as np
 import scanpy as sc
 import squidpy as sq
 import matplotlib.pyplot as plt
 
 from data import extract_visium_data, load_visium_hd, load_xenium_binned
-from kernel import kernel_matrix_sparse, cosine_kernel_operator
-from kpca import kernel_pca_iterative
-from basis import (
-    project_spatial_basis,
-    whiten_eigenmodes,
-    orient_vectors,
-    split_mode_contributions,
-    fractional_energy,
-)
-from plot import plot_spatial_basis, plot_spatial_basis_signed, plot_cumulative_contribution
-from utils import timed, str2bool, normalise_gene_weights, print_top_genes_per_basis
+from kpca import SpatialGeneKPCA
+from plot import plot_spatial_basis
+from utils import timed, str2bool, print_top_genes_per_basis
 
 
-def load_data(fname, platform, verbose=False):
+def load_data(fname, platform):
     if platform == "visium":
         if os.path.exists(fname):
             adata = sq.read.visium(fname)
@@ -40,13 +31,10 @@ def load_data(fname, platform, verbose=False):
 
     adata.var_names_make_unique()
 
-    if verbose:
-        print(adata)
-
     return adata
 
 
-def spatial_rkhs_gene_basis(
+def spatial_rkhs_gene_eigenmodes(
     adata,
     output,
     n_components,
@@ -59,8 +47,6 @@ def spatial_rkhs_gene_basis(
     spot_center,
     gene_center,
     cosine_normalise,
-    whiten,
-    split_modes,
     plot,
     verbose=False,
 ):
@@ -68,62 +54,23 @@ def spatial_rkhs_gene_basis(
         adata, target_sum, transform, min_counts, min_spot_fraction
     )
 
-    with timed("Kernel matrix", verbose):
-        K = kernel_matrix_sparse(coords, radius)
+    sgkpca = SpatialGeneKPCA(radius, alpha, spot_center, gene_center, cosine_normalise, verbose)
+    sgkpca.fit(W, coords, n_components)
 
-    with timed("Cosine matrix", verbose):
-        S = cosine_kernel_operator(W, K, alpha, spot_center, gene_center, cosine_normalise)
-
-    with timed("Kernel PCA", verbose):
-        Z, eigvals, eigvecs = kernel_pca_iterative(S, n_components)
-        Z, eigvecs = orient_vectors(Z), orient_vectors(eigvecs)
-        phi = project_spatial_basis(W, eigvecs)
-
-    if whiten:
-        phi, eigvecs = whiten_eigenmodes(phi, K, eigvecs)
-
-    if split_modes:
-        split_modes = split_mode_contributions(S, eigvals, eigvecs, use_overlap_penalty=False)
-        split_vecs = np.array([mode["v"] for mode in split_modes]).T
-        phi_split = project_spatial_basis(W, split_vecs)
-
-    if verbose:
-        print_top_genes_per_basis(eigvecs, eigvals, gene_names)
-
-        if split_modes:
-            for k, mode in enumerate(split_modes):
-                print(
-                    f"Non-negative eigenmode {k}: (λ{mode['half']} = {mode['contrib']:.4f}, k = {mode['mode']})"
-                )
-
-    adata.uns["srgem"] = {
-        "gene_loadings": eigvecs,
-        "gene_energy": eigvals,
-        "gene_scores": Z,
-        "eigenmodes": phi,
-        "info": {
-            "target_sum": target_sum,
-            "transform": transform,
-            "min_counts": min_counts,
-            "min_spot_fraction": min_spot_fraction,
-            "kernel": "wendland_c2",
-            "radius": radius,
-            "spot_center": spot_center,
-            "gene_center": gene_center,
-            "cosine_normalize": cosine_normalise,
-            "whiten": whiten,
-        },
+    adata.uns["srgem"] = sgkpca.summary()
+    adata.uns["srgem"]["preprocessing"] = {
+        "target_sum": target_sum,
+        "transform": transform,
+        "min_counts": min_counts,
+        "min_spot_fraction": min_spot_fraction,
     }
 
+    if verbose:
+        print_top_genes_per_basis(sgkpca.eigenvectors, sgkpca.eigenvalues, gene_names)
     if output:
         adata.write(output)
     if plot:
-        plot_spatial_basis(adata, phi, cmap="PiYG", vcenter=0)
-        if split_modes:
-            plot_spatial_basis(adata, phi_split, cmap="viridis")
-        # plot_spatial_basis_signed(adata, W, eigvecs)
-        # plot_spatial_basis(adata, fractional_energy(phi), "fractional_energy")
-        # plot_cumulative_contribution(eigvecs)
+        plot_spatial_basis(adata, sgkpca.spot_modes, cmap="PiYG", vcenter=0)
         plt.show()
 
     return adata
@@ -206,7 +153,7 @@ def parse_args():
     parser.add_argument(
         "--genecenter",
         choices=["True", "False"],
-        default="True",
+        default="False",
         help="Center gene weights.",
     )
     parser.add_argument(
@@ -214,16 +161,6 @@ def parse_args():
         choices=["True", "False"],
         default="True",
         help="Apply cosine normalisation to Gram matrix.",
-    )
-    parser.add_argument(
-        "--whiten",
-        action="store_true",
-        help="Whiten spatial eigenmodes",
-    )
-    parser.add_argument(
-        "--split",
-        action="store_true",
-        help="Split modes into positive and negative components",
     )
     parser.add_argument(
         "--plot",
@@ -242,9 +179,11 @@ if __name__ == "__main__":
     args = parse_args()
 
     with timed("Loading data", args.verbose):
-        adata = load_data(args.input, args.platform, args.verbose)
+        adata = load_data(args.input, args.platform)
+    if args.verbose:
+        print(adata)
 
-    adata = spatial_rkhs_gene_basis(
+    adata = spatial_rkhs_gene_eigenmodes(
         adata,
         args.output,
         args.components,
@@ -257,8 +196,6 @@ if __name__ == "__main__":
         str2bool(args.spotcenter),
         str2bool(args.genecenter),
         str2bool(args.normalise),
-        args.whiten,
-        args.split,
         args.plot,
         args.verbose,
     )

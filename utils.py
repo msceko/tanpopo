@@ -1,11 +1,42 @@
 from collections.abc import Iterable
 from contextlib import contextmanager
+from functools import wraps
 from time import perf_counter
 
 import anndata as ad
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import normalize
+
+
+def vector_or_matrix(method):
+    """
+    Decorator for methods that should accept either:
+      - a vector of shape (n,)
+      - a matrix of shape (n, m)
+
+    The wrapped method always receives a 2D ndarray of shape (n, m),
+    and the output is squeezed back to 1D if the input was 1D.
+    """
+
+    @wraps(method)
+    def wrapper(self, X, *args, **kwargs):
+        X = np.asarray(X, dtype=self.dtype)
+        was_vector = X.ndim == 1
+
+        if was_vector:
+            X = X[:, None]
+        elif X.ndim != 2:
+            raise ValueError(f"Expected 1D or 2D input, got shape {X.shape}.")
+
+        out = method(self, X, *args, **kwargs)
+        out = np.asarray(out, dtype=self.dtype)
+
+        if was_vector:
+            return out[:, 0]
+        return out
+
+    return wrapper
 
 
 @contextmanager

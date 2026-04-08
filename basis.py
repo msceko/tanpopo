@@ -48,14 +48,6 @@ def whiten_eigenmodes(phi, K, V=None):
     return phi_ortho, V @ G_inv_sqrt
 
 
-def orient_vectors(V):
-    """Orient vector V according to its sum of squared components."""
-    Vpos = sum((V > 0) * (V**2), 1)
-    Vneg = sum((V < 0) * (V**2), 1)
-    signs = np.sign(Vpos - Vneg)
-    return signs * V
-
-
 def fractional_energy(phi, eps=1e-12):
     """Return fractional energy for each eigenmode"""
     E = phi**2
