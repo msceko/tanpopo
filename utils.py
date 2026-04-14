@@ -65,6 +65,18 @@ def make_iterable(obj):
     return [obj]
 
 
+def make_list(x):
+    """Return x as [x] if not a list"""
+    if isinstance(x, (list, tuple)):
+        return x
+    return [x]
+
+
+def all_equal(X):
+    """Check if all elements in list X are equal"""
+    return all(x == X[0] for x in X)
+
+
 def str2bool(arg):
     ua = str(arg).upper()
     if "TRUE".startswith(ua):
@@ -73,6 +85,33 @@ def str2bool(arg):
         return False
     else:
         raise ValueError("Argument must be 'True' or 'False'")
+
+
+def order_by_label(labels):
+    """
+    Reorder by label so each label block is contiguous.
+
+    Returns
+    -------
+    order : (n_rows,) int ndarray
+        Permutation applied within the sample.
+    offsets : (n_blocks,) int ndarray
+        Block start offsets after reordering.
+    lengths : (n_blocks,) int ndarray
+        Block lengths after reordering.
+    """
+    n_rows = len(labels)
+    order = np.arange(n_rows, dtype=np.int64)
+
+    _, codes = np.unique(labels, return_inverse=True)
+    order = np.argsort(codes, kind="stable")
+    grouped_codes = codes[order]
+
+    starts = np.flatnonzero(np.r_[True, grouped_codes[1:] != grouped_codes[:-1]])
+    stops = np.r_[starts[1:], n_rows]
+    lengths = stops - starts
+
+    return order, starts.astype(np.int64), lengths.astype(np.int64)
 
 
 def normalise_gene_weights(X):

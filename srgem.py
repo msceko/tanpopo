@@ -54,7 +54,9 @@ def spatial_rkhs_gene_eigenmodes(
         adata, target_sum, transform, min_counts, min_spot_fraction
     )
 
-    sgkpca = SpatialGeneKPCA(radius, alpha, spot_center, gene_center, cosine_normalise, verbose)
+    sgkpca = SpatialGeneKPCA(
+        radius, alpha, spot_center, gene_center, cosine_normalise, verbose=verbose
+    )
     sgkpca.fit(W, coords, n_components)
 
     adata.uns["srgem"] = sgkpca.summary()
