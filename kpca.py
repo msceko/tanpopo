@@ -49,6 +49,7 @@ class SpatialGeneKPCA:
         global_center=False,
         verbose=False,
         eps=1e-12,
+        covariates_tol=1e-10,
         dtype=np.float64,
     ):
         self.radius = radius
@@ -59,9 +60,10 @@ class SpatialGeneKPCA:
         self.cosine_normalise = cosine_normalise
         self.verbose = verbose
         self.eps = eps
+        self.covariates_tol = covariates_tol
         self.dtype = dtype
 
-    def _validate_inputs(self, W, coords, labels):
+    def _validate_inputs(self, W, coords, labels, covariates):
         """Put all inputs into sample lists and validate"""
         W, coords = make_list(W), make_list(coords)
         input_lengths = [len(W), len(coords)]
@@ -72,14 +74,20 @@ class SpatialGeneKPCA:
             labels = make_list(labels)
             input_lengths.append(len(labels))
 
+        if covariates is None:
+            covariates = len(W) * [None]
+        else:
+            covariates = [cov[:, None] if cov.ndim < 2 else cov for cov in make_list(covariates)]
+            input_lengths.append(len(covariates))
+
         if not all_equal(input_lengths):
             raise ValueError("All inputs must have the same number of samples.")
         if not all_equal([w.shape[1] for w in W]):
             raise ValueError("ALl samples must have the same number of genes.")
 
-        return W, coords, labels
+        return W, coords, labels, covariates
 
-    def _setup(self, W, coords, labels):
+    def _setup(self, W, coords, labels, covariates):
         """
         Validate inputs, prepare per-sample row ordering, and construct the
         concatenated expression matrix and block-diagonal spatial kernel.
@@ -102,7 +110,7 @@ class SpatialGeneKPCA:
 
         If only one group is present after setup, centering is treated as global.
         """
-        W, coords, labels = self._validate_inputs(W, coords, labels)
+        W, coords, labels, covariates = self._validate_inputs(W, coords, labels, covariates)
 
         self.n_samples = len(W)
         self.n_genes = W[0].shape[1]
@@ -123,6 +131,9 @@ class SpatialGeneKPCA:
             else:
                 idx, offsets, lengths = order_by_label(labels[i])
 
+            if covariates[i] is not None:
+                covariates[i] = covariates[i][idx]
+
             W[i], coords[i] = W[i][idx], coords[i][idx]
             K.append(kernel_matrix_sparse(coords[i], self.radius))
 
@@ -138,6 +149,40 @@ class SpatialGeneKPCA:
         self.W_csr = sp.vstack(W, format="csr").astype(self.dtype, copy=False)
         self.W_csc = self.W_csr.tocsc(copy=False)
         self.K_csr = sp.block_diag(K, format="csr")
+        self._prepare_covariates(covariates)
+
+    def _prepare_covariates(self, covariates):
+        """
+        Build an orthonormal basis Q for the centered covariates.
+
+        Q has shape (n_spots, r), where r is the numerical rank after applying
+        the same spot-centering used by the kernel. Projection is then:
+            U -> U - Q (Q^T U)
+        """
+        if all(cov is None for cov in covariates):
+            self.Q_cov = None
+            self.n_covariates = 0
+            self.n_covariate_basis = 0
+            return
+
+        X = np.vstack(covariates).astype(self.dtype, copy=False)
+        self.n_covariates = X.shape[1]
+
+        if self.spot_center:
+            X = self._spot_centering(X)
+
+        Q, R = np.linalg.qr(X, mode="reduced")
+
+        if R.size == 0:
+            self.Q_cov = None
+            self.n_covariate_basis = 0
+            return
+
+        keep = np.abs(np.diag(R)) > self.covariates_tol
+        Q = Q[:, keep]
+
+        self.Q_cov = Q if Q.shape[1] > 0 else None
+        self.n_covariate_basis = 0 if self.Q_cov is None else self.Q_cov.shape[1]
 
     @cached_property
     def _row_to_group(self):
@@ -175,6 +220,47 @@ class SpatialGeneKPCA:
         Z = self._group_membership
         return (Z.T @ self.K_csr @ Z).tocsr()
 
+    def _diagG_global(self, WTKW):
+        """Fast closed form for global centering"""
+        ones = np.ones(self.total_spots, dtype=self.dtype)
+        K1 = self.K_csr @ ones
+        s11 = float(ones @ K1)
+
+        colsumW = np.asarray(self.W_csc.sum(axis=0)).ravel().astype(self.dtype)
+        meanW = colsumW / float(self.total_spots)
+        wTK1 = np.asarray(self.W_csc.T @ K1).ravel().astype(self.dtype)
+
+        return WTKW - 2.0 * meanW * wTK1 + (meanW**2) * s11
+
+    def _diagG_groups(self, KW, WTKW):
+        """Non-global grouped centering"""
+        Z = self._group_membership
+        A = self._group_kernel_mass
+
+        B = (Z.T @ self.W_csc).tocsr()  # B = Z^T W: group sums of W
+        C = (Z.T @ KW).tocsr()  # C = Z^T K W: group sums of K W
+
+        inv_sizes = 1.0 / self.group_lengths.astype(self.dtype)
+        M = B.multiply(inv_sizes[:, None])  # M = D^{-1} B: group means of W
+
+        MTC = np.asarray(M.multiply(C).sum(axis=0)).ravel().astype(self.dtype)  # diag(M^T C)
+        # diag(M^T A M)
+        AM = A @ M
+        MTAM = np.asarray(M.multiply(AM).sum(axis=0)).ravel().astype(self.dtype)
+
+        return WTKW - 2.0 * MTC + MTAM
+
+    def _diagG_covariate_correction(self, diagG):
+        """Exact low-rank correction for covariates"""
+        Q = self.Q_cov
+        T = (self.W_csc.T @ Q).T  # T = Q^T W(r, p)
+        A = self._apply_K(Q, project_covariates=False)  # A = K0 Q(n, r)
+        S = (self.W_csc.T @ A).T  # S = Q^T K0 W = A^T W(r, p)
+        M = Q.T @ A  # M = Q^T K0 Q (r, r)
+
+        # diag(W^T R K0 R W) = diag0 - 2 diag(T^T S) + diag(T^T M T)
+        return diagG - 2.0 * np.sum(T * S, axis=0) + np.sum(T * (M @ T), axis=0)
+
     @cached_property
     def _diagG(self):
         """
@@ -200,47 +286,30 @@ class SpatialGeneKPCA:
             Z = group membership matrix
             M = D^{-1} Z^T W   (group means of W)
             D = diag(group sizes)
+
+        Covariate-adjusted path:
+            use the exact low-rank correction
+                K_* = R_cov (C K C) R_cov
+                    = K0 - Q(Q^T K0) - (K0 Q)Q^T + Q(Q^T K0 Q)Q^T
+
+            where K0 = C K C (or K if spot_center=False).
         """
         # Common uncentered term: diag(W^T K W)
         KW = self.K_csr @ self.W_csc
         WTKW = np.asarray(self.W_csc.multiply(KW).sum(axis=0)).ravel().astype(self.dtype)
 
         if not self.spot_center:
-            return np.maximum(WTKW, self.eps)
+            diagG = WTKW
+        elif self._global_center:
+            diagG = self._diagG_global(WTKW)
+        else:
+            diagG = self._diagG_groups(KW, WTKW)
 
-        if self._global_center:
-            # Fast closed form for global centering
-            ones = np.ones(self.total_spots, dtype=self.dtype)
-            K1 = self.K_csr @ ones
-            s11 = float(ones @ K1)
-
-            colsumW = np.asarray(self.W_csc.sum(axis=0)).ravel().astype(self.dtype)
-            meanW = colsumW / float(self.total_spots)
-            wTK1 = np.asarray(self.W_csc.T @ K1).ravel().astype(self.dtype)
-
-            diagG = WTKW - 2.0 * meanW * wTK1 + (meanW**2) * s11
+        if self.Q_cov is None:
             return np.maximum(diagG, self.eps)
 
-        # Non-global grouped centering
-        Z = self._group_membership
-        A = self._group_kernel_mass
+        diagG = self._diagG_covariate_correction(diagG)
 
-        # B = Z^T W      : group sums of W
-        # C = Z^T K W    : group sums of K W
-        B = (Z.T @ self.W_csc).tocsr()
-        C = (Z.T @ KW).tocsr()
-
-        # M = D^{-1} B   : group means of W
-        inv_sizes = 1.0 / self.group_lengths.astype(self.dtype)
-        M = B.multiply(inv_sizes[:, None])
-
-        # diag(M^T C)
-        MTC = np.asarray(M.multiply(C).sum(axis=0)).ravel().astype(self.dtype)
-        # diag(M^T A M)
-        AM = A @ M
-        MTAM = np.asarray(M.multiply(AM).sum(axis=0)).ravel().astype(self.dtype)
-
-        diagG = WTKW - 2.0 * MTC + MTAM
         return np.maximum(diagG, self.eps)
 
     @cached_property
@@ -289,19 +358,43 @@ class SpatialGeneKPCA:
     @vector_or_matrix
     def _spot_centering(self, U):
         """Apply spot-centering"""
+        if not self.spot_center:
+            return U
         if self._global_center:
             return self._apply_centering(U)
         return self._apply_centering_per_group(U)
 
     @vector_or_matrix
-    def _apply_K(self, U):
+    def _covariate_projection(self, U):
         """
-        Apply K or H_n K H_n.
+        Apply orthogonal projection onto the complement of the covariate span:
+            U -> (I - Q Q^T) U
         """
-        if not self.spot_center:
-            return self.K_csr @ U
-        Uc = self._spot_centering(U)
-        return self._spot_centering(self.K_csr @ Uc)
+        if self.Q_cov is None:
+            return U
+        return U - self.Q_cov @ (self.Q_cov.T @ U)
+
+    @vector_or_matrix
+    def _spot_projection(self, U, project_covariates):
+        """
+        Apply the full spot-space projection used by K_*:
+            U -> R_cov C U
+        """
+        U = self._spot_centering(U)
+        if project_covariates:
+            U = self._covariate_projection(U)
+        return U
+
+    @vector_or_matrix
+    def _apply_K(self, U, project_covariates=True):
+        """
+        Apply the adjusted kernel action K_* = R_cov C K C R_cov if project_covariates=True
+        Otherwise apply C K C, or just K if spot_center=False
+        """
+        U = self._spot_projection(U, project_covariates)
+        U = self.K_csr @ U
+        U = self._spot_projection(U, project_covariates)
+        return U
 
     @vector_or_matrix
     def _apply_B(self, X):
@@ -400,7 +493,7 @@ class SpatialGeneKPCA:
 
         return phi, loadings
 
-    def fit(self, W, coords, n_components, labels=None, tol=0, maxiter=None):
+    def fit(self, W, coords, n_components, labels=None, covariates=None, tol=0, maxiter=None):
         """
         Top eigenpairs of symmetric LinearOperator G via ARPACK (eigsh).
 
@@ -414,6 +507,9 @@ class SpatialGeneKPCA:
             Number of leading eigenpairs to compute.
         labels : list or None
             Optional list of per-sample label vectors.
+        covariates : list or None
+            Optional list of per-sample spot-level covariate matrices.
+            These are projected out implicitly in spot space.
         tol : float
             ARPACK tolerance.
         maxiter : int or None
@@ -427,7 +523,7 @@ class SpatialGeneKPCA:
         """
         self._clear_cached_properties()
         with timed("Constructing kernel matrix", self.verbose):
-            self._setup(W, coords, labels)
+            self._setup(W, coords, labels, covariates)
 
         with timed("Computing eigendecomposition", self.verbose):
             self.eigenvalues, self.eigenvectors = eigsh(
@@ -465,5 +561,7 @@ class SpatialGeneKPCA:
                 "global_center": self.global_center,
                 "gene_center": self.gene_center,
                 "cosine_normalize": self.cosine_normalise,
+                "n_covariates": getattr(self, "n_covariates", 0),
+                "n_covariate_basis": getattr(self, "n_covariate_basis", 0),
             },
         }
