@@ -63,6 +63,17 @@ class SpatialGeneKPCA:
         self.covariates_tol = covariates_tol
         self.dtype = dtype
 
+    def _clear_cached_properties(self):
+        for name in (
+            "_row_to_group",
+            "_group_membership",
+            "_group_kernel_mass",
+            "_diagG",
+            "_norm_factor",
+            "_G",
+        ):
+            self.__dict__.pop(name, None)
+
     def _validate_inputs(self, W, coords, labels, covariates):
         """Put all inputs into sample lists and validate"""
         W, coords = make_list(W), make_list(coords)
@@ -220,6 +231,99 @@ class SpatialGeneKPCA:
         Z = self._group_membership
         return (Z.T @ self.K_csr @ Z).tocsr()
 
+    @vector_or_matrix
+    def _apply_centering(self, U):
+        """Apply centering operator H_n = I_n - 1_n columnwise."""
+        return U - U.mean(axis=0, keepdims=True)
+
+    @vector_or_matrix
+    def _apply_centering_per_group(self, U):
+        """Apply centering operator to each group separately"""
+        out = np.array(U, copy=True, dtype=self.dtype)
+        for offset, length in zip(self.group_offsets, self.group_lengths):
+            sl = slice(int(offset), int(offset + length))
+            out[sl] -= out[sl].mean(axis=0, keepdims=True)
+        return out
+
+    @vector_or_matrix
+    def _gene_centering(self, U):
+        """Apply gene-centering"""
+        return self._apply_centering(U)
+
+    @vector_or_matrix
+    def _spot_centering(self, U):
+        """Apply spot-centering"""
+        if not self.spot_center:
+            return U
+        if self._global_center:
+            return self._apply_centering(U)
+        return self._apply_centering_per_group(U)
+
+    @vector_or_matrix
+    def _covariate_projection(self, U):
+        """
+        Apply orthogonal projection onto the complement of the covariate span:
+            U -> (I - Q Q^T) U
+        """
+        if self.Q_cov is None:
+            return U
+        return U - self.Q_cov @ (self.Q_cov.T @ U)
+
+    @vector_or_matrix
+    def _spot_projection(self, U, project_covariates):
+        """
+        Apply the full spot-space projection used by K_*:
+            U -> R_cov C U
+        """
+        U = self._spot_centering(U)
+        if project_covariates:
+            U = self._covariate_projection(U)
+        return U
+
+    @vector_or_matrix
+    def _apply_K(self, U, project_covariates=True):
+        """
+        Apply the adjusted kernel action K_* = R_cov C K C R_cov if project_covariates=True
+        Otherwise apply C K C, or just K if spot_center=False
+        """
+        U = self._spot_projection(U, project_covariates)
+        U = self.K_csr @ U
+        U = self._spot_projection(U, project_covariates)
+        return U
+
+    @vector_or_matrix
+    def _apply_B(self, X):
+        """
+        Apply B H_g to gene-space input X, where:
+          B = W              if cosine_normalise=False
+          B = W D^{-alpha}   if cosine_normalise=True
+
+        So this map is:
+          X -> W [D^{-alpha}] [H_g X]
+        """
+        if self.gene_center:
+            X = self._gene_centering(X)
+        if self.cosine_normalise:
+            X = self._norm_factor * X
+        return self.W_csr @ X
+
+    @vector_or_matrix
+    def _apply_BT(self, U):
+        """
+        Apply H_g B^T to spot-space input U, where:
+          B^T = W^T              if cosine_normalise=False
+          B^T = D^{-alpha} W^T   if cosine_normalise=True
+
+        So this map is:
+          U -> H_g [D^{-alpha}] W^T U
+        """
+        Y = self.W_csc.T @ U
+        if self.cosine_normalise:
+            Y = self._norm_factor * Y
+        if self.gene_center:
+            Y = self._gene_centering(Y)
+        return Y
+
     def _diagG_global(self, WTKW):
         """Fast closed form for global centering"""
         ones = np.ones(self.total_spots, dtype=self.dtype)
@@ -324,110 +428,6 @@ class SpatialGeneKPCA:
     def _G(self):
         """Gene-space operator G = H_g B^T K_* B H_g"""
         return LinearOperator((self.n_genes, self.n_genes), matvec=self._matvec, dtype=self.dtype)
-
-    def _clear_cached_properties(self):
-        for name in (
-            "_row_to_group",
-            "_group_membership",
-            "_group_kernel_mass",
-            "_diagG",
-            "_norm_factor",
-            "_G",
-        ):
-            self.__dict__.pop(name, None)
-
-    @vector_or_matrix
-    def _apply_centering(self, U):
-        """Apply centering operator H_n = I_n - 1_n columnwise."""
-        return U - U.mean(axis=0, keepdims=True)
-
-    @vector_or_matrix
-    def _apply_centering_per_group(self, U):
-        """Apply centering operator to each group separately"""
-        out = np.array(U, copy=True, dtype=self.dtype)
-        for offset, length in zip(self.group_offsets, self.group_lengths):
-            sl = slice(int(offset), int(offset + length))
-            out[sl] -= out[sl].mean(axis=0, keepdims=True)
-        return out
-
-    @vector_or_matrix
-    def _gene_centering(self, U):
-        """Apply gene-centering"""
-        return self._apply_centering(U)
-
-    @vector_or_matrix
-    def _spot_centering(self, U):
-        """Apply spot-centering"""
-        if not self.spot_center:
-            return U
-        if self._global_center:
-            return self._apply_centering(U)
-        return self._apply_centering_per_group(U)
-
-    @vector_or_matrix
-    def _covariate_projection(self, U):
-        """
-        Apply orthogonal projection onto the complement of the covariate span:
-            U -> (I - Q Q^T) U
-        """
-        if self.Q_cov is None:
-            return U
-        return U - self.Q_cov @ (self.Q_cov.T @ U)
-
-    @vector_or_matrix
-    def _spot_projection(self, U, project_covariates):
-        """
-        Apply the full spot-space projection used by K_*:
-            U -> R_cov C U
-        """
-        U = self._spot_centering(U)
-        if project_covariates:
-            U = self._covariate_projection(U)
-        return U
-
-    @vector_or_matrix
-    def _apply_K(self, U, project_covariates=True):
-        """
-        Apply the adjusted kernel action K_* = R_cov C K C R_cov if project_covariates=True
-        Otherwise apply C K C, or just K if spot_center=False
-        """
-        U = self._spot_projection(U, project_covariates)
-        U = self.K_csr @ U
-        U = self._spot_projection(U, project_covariates)
-        return U
-
-    @vector_or_matrix
-    def _apply_B(self, X):
-        """
-        Apply B H_g to gene-space input X, where:
-          B = W              if cosine_normalise=False
-          B = W D^{-alpha}   if cosine_normalise=True
-
-        So this map is:
-          X -> W [D^{-alpha}] [H_g X]
-        """
-        if self.gene_center:
-            X = self._gene_centering(X)
-        if self.cosine_normalise:
-            X = self._norm_factor * X
-        return self.W_csr @ X
-
-    @vector_or_matrix
-    def _apply_BT(self, U):
-        """
-        Apply H_g B^T to spot-space input U, where:
-          B^T = W^T              if cosine_normalise=False
-          B^T = D^{-alpha} W^T   if cosine_normalise=True
-
-        So this map is:
-          U -> H_g [D^{-alpha}] W^T U
-        """
-        Y = self.W_csc.T @ U
-        if self.cosine_normalise:
-            Y = self._norm_factor * Y
-        if self.gene_center:
-            Y = self._gene_centering(Y)
-        return Y
 
     def _matvec(self, x):
         """G x = H_g B^T K_* B H_g x"""

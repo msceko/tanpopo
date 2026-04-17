@@ -43,6 +43,7 @@ def spatial_rkhs_gene_eigenmodes(
     min_counts,
     min_spot_fraction,
     target_sum,
+    covariates,
     alpha,
     spot_center,
     gene_center,
@@ -50,14 +51,14 @@ def spatial_rkhs_gene_eigenmodes(
     plot,
     verbose=False,
 ):
-    W, coords, gene_names = extract_visium_data(
-        adata, target_sum, transform, min_counts, min_spot_fraction
+    W, coords, gene_names, covariates = extract_visium_data(
+        adata, target_sum, transform, min_counts, min_spot_fraction, covariates
     )
 
     sgkpca = SpatialGeneKPCA(
         radius, alpha, spot_center, gene_center, cosine_normalise, verbose=verbose
     )
-    sgkpca.fit(W, coords, n_components)
+    sgkpca.fit(W, coords, n_components, covariates=covariates)
 
     adata.uns["srgem"] = sgkpca.summary()
     adata.uns["srgem"]["preprocessing"] = {
@@ -72,7 +73,8 @@ def spatial_rkhs_gene_eigenmodes(
     if output:
         adata.write(output)
     if plot:
-        plot_spatial_basis(adata, sgkpca.spot_modes, cmap="PiYG", vcenter=0)
+        for spot_mode in sgkpca.spot_modes:
+            plot_spatial_basis(adata, spot_mode, cmap="PiYG", vcenter=0)
         plt.show()
 
     return adata
@@ -140,6 +142,13 @@ def parse_args():
         help="Spatial platform.",
     )
     parser.add_argument(
+        "--covariates",
+        type=str,
+        choices=["log_total_counts", "log_detected_genes", "mito_fraction", "ribo_fraction"],
+        nargs="+",
+        help="Include covariates to correct for.",
+    )
+    parser.add_argument(
         "--alpha",
         type=float,
         default=1.0,
@@ -194,6 +203,7 @@ if __name__ == "__main__":
         args.mincounts,
         args.minspots,
         args.targetsum,
+        args.covariates,
         args.alpha,
         str2bool(args.spotcenter),
         str2bool(args.genecenter),

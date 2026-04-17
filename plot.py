@@ -8,7 +8,7 @@ from utils import make_iterable, cumulative_contribution
 
 
 def spatial_scatter(adata, keys, **kwargs):
-    n_cols = int(np.round(5 / 3 * np.sqrt(len(keys))))
+    n_cols = int(np.round(4 / 3 * np.sqrt(len(keys))))
     axs = sc.pl.embedding(
         adata,
         basis="spatial",
