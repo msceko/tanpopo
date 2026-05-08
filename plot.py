@@ -47,7 +47,7 @@ def plot_spatial_basis_signed(adata, X, eigvecs):
     plot_spatial_basis(adata, phi_neg, "spatial_mode_negative")
 
 
-def plot_gene_clusters(adata, key="leiden"):
+def plot_gene_clusters(adata, key="leiden", **kwargs):
     """Plot spatial distributions of gene clusters"""
     keys = []
     for cluster in range(adata.var[key].max() + 1):
@@ -55,7 +55,7 @@ def plot_gene_clusters(adata, key="leiden"):
         genes = (adata.var[key] == cluster).tolist()
         adata.obs[keys[cluster]] = np.asarray(adata.X[:, genes].sum(axis=1)).ravel()
 
-    spatial_scatter(adata, keys)
+    spatial_scatter(adata, keys, **kwargs)
 
 
 def plot_cumulative_contribution(eigvecs):
@@ -76,4 +76,4 @@ def plot_umap(X, obs, obs_names, n_neighbors, min_dist=0.1, spread=1.0, **kwargs
 
     sc.pp.neighbors(adata, n_neighbors=n_neighbors, use_rep="X")
     sc.tl.umap(adata, min_dist=min_dist, spread=spread)
-    sc.pl.umap(adata, color="umap", size=20, cmap="tab20", **kwargs)
+    sc.pl.umap(adata, color="umap", size=20, palette="tab20", **kwargs)

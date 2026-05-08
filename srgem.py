@@ -6,7 +6,7 @@ import squidpy as sq
 import matplotlib.pyplot as plt
 
 from data import extract_visium_data, load_visium_hd, load_xenium_binned
-from kpca import SpatialGeneKPCA
+from models import SpatialGeneKPCA
 from plot import plot_spatial_basis
 from utils import timed, str2bool, print_top_genes_per_basis
 
@@ -47,7 +47,6 @@ def spatial_rkhs_gene_eigenmodes(
     alpha,
     spot_center,
     gene_center,
-    cosine_normalise,
     plot,
     verbose=False,
 ):
@@ -55,17 +54,30 @@ def spatial_rkhs_gene_eigenmodes(
         adata, target_sum, transform, min_counts, min_spot_fraction, covariates
     )
 
-    sgkpca = SpatialGeneKPCA(
-        radius, alpha, spot_center, gene_center, cosine_normalise, verbose=verbose
-    )
+    spot_operator = "sample" if spot_center else "none"
+    sgkpca = SpatialGeneKPCA(radius, spot_operator, alpha, gene_center, verbose=verbose)
     sgkpca.fit(W, coords, n_components, covariates=covariates)
 
-    adata.uns["srgem"] = sgkpca.summary()
-    adata.uns["srgem"]["preprocessing"] = {
-        "target_sum": target_sum,
-        "transform": transform,
-        "min_counts": min_counts,
-        "min_spot_fraction": min_spot_fraction,
+    adata.obsm["spot_modes"] = sgkpca.spot_modes[0]
+    adata.varm["srgem_eigenvectors"] = sgkpca.eigenvectors
+    adata.varm["gene_loadings"] = sgkpca.gene_loadings
+    adata.varm["gene_scores"] = sgkpca.gene_scores
+    adata.uns["srgem"] = {
+        "eigenvalues": sgkpca.eigenvalues,
+        "preprocessing": {
+            "target_sum": target_sum,
+            "transform": transform,
+            "min_counts": min_counts,
+            "min_spot_fraction": min_spot_fraction,
+        },
+        "cfg": {
+            "kernel": "wendland_c2",
+            "radius": sgkpca.radius,
+            "alpha": sgkpca.alpha,
+            "spot_operator": sgkpca.spot_operator,
+            "gene_center": sgkpca.gene_center,
+            "covariates": covariates,
+        },
     }
 
     if verbose:
@@ -168,12 +180,6 @@ def parse_args():
         help="Center gene weights.",
     )
     parser.add_argument(
-        "--normalise",
-        choices=["True", "False"],
-        default="True",
-        help="Apply cosine normalisation to Gram matrix.",
-    )
-    parser.add_argument(
         "--plot",
         action="store_true",
         help="Plot spatial gene basis",
@@ -207,7 +213,6 @@ if __name__ == "__main__":
         args.alpha,
         str2bool(args.spotcenter),
         str2bool(args.genecenter),
-        str2bool(args.normalise),
         args.plot,
         args.verbose,
     )

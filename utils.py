@@ -65,11 +65,9 @@ def make_iterable(obj):
     return [obj]
 
 
-def make_list(x):
+def as_list(x):
     """Return x as [x] if not a list"""
-    if isinstance(x, (list, tuple)):
-        return x
-    return [x]
+    return list(x) if isinstance(x, (list, tuple)) else [x]
 
 
 def all_equal(X):
