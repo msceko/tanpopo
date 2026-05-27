@@ -1,16 +1,16 @@
 import numpy as np
 from scipy.sparse.linalg import eigsh
 
-from data import prepare_samples, concatenate_samples
-from operators import (
+from tanpopo.data import prepare_samples, concatenate_samples
+from tanpopo.operators import (
     SpotOperatorSpec,
     GeneKernel,
     SampleOperatorBuilder,
     SumGeneOperator,
     gene_scale_from_diag,
 )
-from lift import ConcatenatedModeLifter, SamplewiseModeLifter
-from utils import timed
+from tanpopo.lift import ConcatenatedModeLifter, SamplewiseModeLifter
+from tanpopo.utils import timed
 
 
 class KPCAModel:
@@ -52,7 +52,9 @@ class KPCAModel:
         signs = np.where(pos >= neg, 1.0, -1.0)
         return V * signs[None, :]
 
-    def _fit_operator(self, G, n_components, signed=False, tol=0, maxiter=None, which=None):
+    def _fit_operator(
+        self, G, n_components, signed=False, tol=0, maxiter=None, which=None
+    ):
         which = ("LM" if signed else "LA") if which is None else which
 
         vals, vecs = eigsh(
@@ -90,15 +92,21 @@ class KPCAModel:
 
         return self
 
-    def fit(self, W, coords, n_components, labels=None, covariates=None, tol=0, maxiter=None):
+    def fit(
+        self, W, coords, n_components, labels=None, covariates=None, tol=0, maxiter=None
+    ):
         with timed("Preparing samples", self.verbose):
-            self.samples = prepare_samples(W, coords, self.radius, labels, covariates, self.dtype)
+            self.samples = prepare_samples(
+                W, coords, self.radius, labels, covariates, self.dtype
+            )
 
         with timed("Building operator", self.verbose):
             G, lifter = self._build_operator(self.samples)
 
         with timed("Solving eigenproblem", self.verbose):
-            self._fit_operator(G, n_components, signed=self._signed, tol=tol, maxiter=maxiter)
+            self._fit_operator(
+                G, n_components, signed=self._signed, tol=tol, maxiter=maxiter
+            )
 
         self.spot_modes, self.gene_loadings = lifter.lift(
             self.eigenvectors, self.eigenvalues, normalise=True
@@ -140,7 +148,9 @@ class SpatialGeneKPCA(KPCAModel):
         Wc, Kc, sample_groups, label_groups, covc = concatenate_samples(samples)
 
         spec = SpotOperatorSpec(self.spot_operator)
-        S = spec.build(Kc, sample_groups, label_groups, covc, self.covariates_tol, self.dtype)
+        S = spec.build(
+            Kc, sample_groups, label_groups, covc, self.covariates_tol, self.dtype
+        )
         diag = np.maximum(S.gene_spatial_variance(Wc), self.eps)
         scale = gene_scale_from_diag(diag, self.alpha, self.eps)
 
@@ -234,7 +244,9 @@ class SpatialGeneContrastKPCA(KPCAModel):
 
         # The spot operator is irrelevant for lifting; ModeLift only uses W,
         # gene_scale, and gene_center. G_left and G_right share these.
-        lifter = ConcatenatedModeLifter(gene_kernel=G_left, samples=samples, dtype=self.dtype)
+        lifter = ConcatenatedModeLifter(
+            gene_kernel=G_left, samples=samples, dtype=self.dtype
+        )
 
         return G, lifter
 
@@ -393,8 +405,12 @@ class SpatialGeneSampleContrastKPCA(KPCAModel):
 
         self.sample_coefficients_ = coeff
         self.gene_spatial_scores_samples_ = diags
-        self.gene_spatial_scores_weighted_ = np.vstack([w * d for (w, _), d in zip(ops, diags)])
-        self.gene_spatial_scores_contrast_ = self.gene_spatial_scores_weighted_.sum(axis=0)
+        self.gene_spatial_scores_weighted_ = np.vstack(
+            [w * d for (w, _), d in zip(ops, diags)]
+        )
+        self.gene_spatial_scores_contrast_ = self.gene_spatial_scores_weighted_.sum(
+            axis=0
+        )
 
         lifter = SamplewiseModeLifter(
             ops=ops, samples=samples, normalise_by=self.normalise_by, dtype=self.dtype

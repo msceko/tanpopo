@@ -5,10 +5,10 @@ import scanpy as sc
 import squidpy as sq
 import matplotlib.pyplot as plt
 
-from data import extract_visium_data, load_visium_hd, load_xenium_binned
-from models import SpatialGeneKPCA
-from plot import plot_spatial_basis
-from utils import timed, str2bool, print_top_genes_per_basis
+from tanpopo.data import extract_visium_data, load_visium_hd, load_xenium_binned
+from tanpopo.models import SpatialGeneKPCA
+from tanpopo.plot import plot_spatial_basis
+from tanpopo.utils import timed, str2bool, print_top_genes_per_basis
 
 
 def load_data(fname, platform):
@@ -58,11 +58,11 @@ def spatial_rkhs_gene_eigenmodes(
     sgkpca = SpatialGeneKPCA(radius, spot_operator, alpha, gene_center, verbose=verbose)
     sgkpca.fit(W, coords, n_components, covariates=covariates)
 
-    adata.obsm["spot_modes"] = sgkpca.spot_modes[0]
-    adata.varm["srgem_eigenvectors"] = sgkpca.eigenvectors
-    adata.varm["gene_loadings"] = sgkpca.gene_loadings
-    adata.varm["gene_scores"] = sgkpca.gene_scores
-    adata.uns["srgem"] = {
+    adata.obsm["tanpopo_spot_modes"] = sgkpca.spot_modes[0]
+    adata.varm["tanpopo_eigenvectors"] = sgkpca.eigenvectors
+    adata.varm["tanpopo_gene_loadings"] = sgkpca.gene_loadings
+    adata.varm["tanpopo_gene_scores"] = sgkpca.gene_scores
+    adata.uns["tanpopo"] = {
         "eigenvalues": sgkpca.eigenvalues,
         "preprocessing": {
             "target_sum": target_sum,
@@ -156,7 +156,12 @@ def parse_args():
     parser.add_argument(
         "--covariates",
         type=str,
-        choices=["log_total_counts", "log_detected_genes", "mito_fraction", "ribo_fraction"],
+        choices=[
+            "log_total_counts",
+            "log_detected_genes",
+            "mito_fraction",
+            "ribo_fraction",
+        ],
         nargs="+",
         help="Include covariates to correct for.",
     )
@@ -192,7 +197,7 @@ def parse_args():
     return parser.parse_args()
 
 
-if __name__ == "__main__":
+def main():
     args = parse_args()
 
     with timed("Loading data", args.verbose):
@@ -216,3 +221,7 @@ if __name__ == "__main__":
         args.plot,
         args.verbose,
     )
+
+
+if __name__ == "__main__":
+    main()

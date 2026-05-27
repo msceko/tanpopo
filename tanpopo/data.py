@@ -10,8 +10,8 @@ import scanpy as sc
 import scipy.sparse as sp
 from matplotlib.image import imread
 
-from kernel import kernel_matrix_sparse
-from utils import as_list
+from tanpopo.kernel import kernel_matrix_sparse
+from tanpopo.utils import as_list
 
 
 def get_counts_matrix(adata, sparse=True, layer=None):
@@ -53,7 +53,9 @@ def compute_mito_fraction(X_counts, gene_names, eps=1e-12):
         raise ValueError("No mitochondrial genes found for 'mito_fraction'.")
 
     total_counts = np.asarray(X_counts.sum(axis=1)).ravel().astype(np.float64)
-    mito_counts = np.asarray(X_counts[:, mito_mask].sum(axis=1)).ravel().astype(np.float64)
+    mito_counts = (
+        np.asarray(X_counts[:, mito_mask].sum(axis=1)).ravel().astype(np.float64)
+    )
     return mito_counts / (total_counts + eps)
 
 
@@ -69,7 +71,9 @@ def compute_ribo_fraction(X_counts, gene_names, eps=1e-12):
         raise ValueError("No ribosomal genes found for 'ribo_fraction'.")
 
     total_counts = np.asarray(X_counts.sum(axis=1)).ravel().astype(np.float64)
-    ribo_counts = np.asarray(X_counts[:, ribo_mask].sum(axis=1)).ravel().astype(np.float64)
+    ribo_counts = (
+        np.asarray(X_counts[:, ribo_mask].sum(axis=1)).ravel().astype(np.float64)
+    )
     return ribo_counts / (total_counts + eps)
 
 
@@ -141,7 +145,9 @@ def extract_visium_data(
         min_spots = int(min_spot_fraction * len(adata.obs))
         sc.pp.filter_genes(adata, min_cells=min_spots)
 
-    covariate_matrix = extract_covariates(adata, covariates, layer) if covariates else None
+    covariate_matrix = (
+        extract_covariates(adata, covariates, layer) if covariates else None
+    )
 
     if target_sum:
         sc.pp.normalize_total(adata, target_sum=target_sum)
@@ -241,7 +247,9 @@ def prepare_sample(W, coords, radius, labels=None, covariates=None, dtype=np.flo
 
     K = kernel_matrix_sparse(coords, radius).astype(dtype)
 
-    return SampleData(W=W, K=K, inv_order=inv, labels_groups=groups, covariates=covariates)
+    return SampleData(
+        W=W, K=K, inv_order=inv, labels_groups=groups, covariates=covariates
+    )
 
 
 def prepare_samples(W, coords, radius, labels=None, covariates=None, dtype=np.float64):
@@ -272,7 +280,9 @@ def concatenate_samples(samples):
 
     covs = []
     has_cov = any(s.covariates is not None for s in samples)
-    n_cov = next((s.covariates.shape[1] for s in samples if s.covariates is not None), 0)
+    n_cov = next(
+        (s.covariates.shape[1] for s in samples if s.covariates is not None), 0
+    )
 
     for off, s in zip(offsets, samples):
         off = int(off)
@@ -388,7 +398,8 @@ def xenium_adata(data, meta, genes, x, y, library_id: str = "library_id"):
     """Construct visium-like anndata with xenium data"""
     # Spot/bin IDs (Visium uses barcodes; here we create stable names)
     obs_names = pd.Index(
-        [f"bin_y{yb}_x{xb}" for yb, xb in zip(meta["y_bin"], meta["x_bin"])], name="spot_id"
+        [f"bin_y{yb}_x{xb}" for yb, xb in zip(meta["y_bin"], meta["x_bin"])],
+        name="spot_id",
     )
     var_names = pd.Index(genes.astype(str), name="gene_ids")
 

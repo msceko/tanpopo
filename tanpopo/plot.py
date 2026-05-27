@@ -3,8 +3,8 @@ import numpy as np
 import scanpy as sc
 import matplotlib.pyplot as plt
 
-from basis import project_spatial_basis
-from utils import make_iterable, cumulative_contribution
+from tanpopo.basis import project_spatial_basis
+from tanpopo.utils import make_iterable, cumulative_contribution
 
 
 def spatial_scatter(adata, keys, **kwargs):
@@ -25,7 +25,15 @@ def spatial_scatter(adata, keys, **kwargs):
     for i, ax in enumerate(make_iterable(axs)):
         ax.invert_yaxis()
         ax.axis("equal")
-        ax.text(0.05, 0.95, f"{i}.", transform=ax.transAxes, ha="left", va="top", fontsize=12)
+        ax.text(
+            0.05,
+            0.95,
+            f"{i}.",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=12,
+        )
         ax.axis("off")
 
 

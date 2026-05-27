@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.linalg import eigh
 
-from utils import quad_form
+from tanpopo.utils import quad_form
 
 
 def project_spatial_basis(X, Z):

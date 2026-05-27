@@ -4,8 +4,8 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import LinearOperator
 
-from data import Groups
-from projection import SpotProjector
+from tanpopo.data import Groups
+from tanpopo.projection import SpotProjector
 
 
 class ProjectedKernel:
@@ -46,7 +46,9 @@ class SpotOperatorSpec:
     centering: str
 
     def build(self, K, sample_groups, label_groups, covariates, tol, dtype):
-        groups = groups_for_operator(self.centering, K.shape[0], sample_groups, label_groups)
+        groups = groups_for_operator(
+            self.centering, K.shape[0], sample_groups, label_groups
+        )
         projector = SpotProjector(
             K.shape[0],
             groups=groups,
@@ -198,7 +200,9 @@ class SampleOperatorBuilder:
         raw_diags = np.vstack(raw_diags)
 
         weights = self._sample_weights(samples, raw_diags)
-        coeff = weights if signed_coefficients is None else weights * signed_coefficients
+        coeff = (
+            weights if signed_coefficients is None else weights * signed_coefficients
+        )
 
         if self.normalise_by == "pooled":
             ref = np.sum(np.abs(coeff)[:, None] * raw_diags, axis=0)

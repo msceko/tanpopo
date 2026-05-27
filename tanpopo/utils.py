@@ -188,7 +188,7 @@ def argtop(v, n_top, mode):
     return idx[:n_top]
 
 
-def top_genes(scores, genes, n_top, mode="pos"):
+def top_scored_genes(scores, genes, n_top, mode="pos"):
     idx = argtop(scores, n_top, mode)
     return list(genes[idx]), list(scores[idx])
 
@@ -203,7 +203,7 @@ def top_genes_per_basis(eigvecs, genes, n_top, mode="abs"):
 
 
 def print_top_genes(scores, genes, n_top):
-    top_genes, top_scores = top_genes(scores, genes, n_top)
+    top_genes, top_scores = top_scored_genes(scores, genes, n_top)
     for gene, score in zip(top_genes, top_scores):
         print(f"{gene:15s} {score:+.3f}")
 
@@ -233,3 +233,57 @@ def cumulative_contribution(eigvecs):
     """Cumulative squared-loading contribution curve for one component"""
     sq_sorted = np.sort(eigvecs**2, axis=0)[::-1]
     return np.cumsum(sq_sorted, axis=0) / sq_sorted.sum(0)
+
+
+def choose_k_by_energy(eigvals, energy=0.9):
+    """
+    Choose smallest k such that cumulative explained 'kernel variance' >= energy.
+    Using eigvals of centered Gram.
+    """
+    if eigvals.size == 0:
+        return 0
+    cum = np.cumsum(eigvals)
+    total = cum[-1]
+    if total <= 0:
+        return 0
+    k = int(np.searchsorted(cum / total, energy) + 1)
+    return k
+
+
+def choose_k_by_elbow(eigvals, k_max=None):
+    """
+    Lightweight elbow finder on log-eigvals curve:
+    pick k where second-difference is most negative (strongest curvature).
+    """
+    if eigvals.size < 3:
+        return int(eigvals.size)
+    if k_max is None:
+        k_max = eigvals.size
+    y = np.log(np.clip(eigvals[:k_max], 1e-30, None))
+    # discrete second derivative
+    d2 = y[:-2] - 2 * y[1:-1] + y[2:]
+    k = int(np.argmin(d2) + 2)  # +2 to map to component index (1-based)
+    return max(2, min(k, k_max))
+
+
+def choose_k(eigvals, method="auto", energy=0.9, k_max=50):
+    """
+    method:
+      - "energy": energy threshold
+      - "elbow": curvature elbow
+      - "auto": min(elbow, energy-based) with sensible bounds
+    """
+    eigvals = np.asarray(eigvals, dtype=np.float64)
+    eigvals = eigvals[: min(k_max, eigvals.size)]
+    if eigvals.size == 0:
+        return 0
+
+    k_e = choose_k_by_energy(eigvals, energy=energy)
+    k_l = choose_k_by_elbow(eigvals, k_max=eigvals.size)
+
+    if method == "energy":
+        return k_e
+    if method == "elbow":
+        return k_l
+    # auto: take the more conservative (smaller) but at least 2
+    return int(max(2, min(k_e, k_l, eigvals.size)))
