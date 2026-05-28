@@ -28,9 +28,7 @@ dev = [
 ]
 
 [project.scripts]
-tpp-spatial-modes = "tanpopo.cli:main"
-tpp-cluster-spots = "tanpopo.clustering:cluster_spots"
-tpp-cluster-genes = "tanpopo.clustering:cluster_genes"
+tanpopo = "tanpopo.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
