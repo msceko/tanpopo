@@ -1,40 +1,15 @@
 import argparse
-import os
 
 import scanpy as sc
-import squidpy as sq
 import matplotlib.pyplot as plt
 
-from tanpopo.data import extract_visium_data, load_visium_hd, load_xenium_binned
+from tanpopo.data import read_anndata
 from tanpopo.models import SpatialGeneKPCA
 from tanpopo.plot import plot_spatial_basis
 from tanpopo.utils import timed, str2bool, print_top_genes_per_basis
 
 
-def load_data(fname, platform):
-    if platform == "visium":
-        if os.path.exists(fname):
-            adata = sq.read.visium(fname)
-        else:
-            adata = sq.datasets.visium(fname)
-    elif platform == "visiumhd":
-        adata = load_visium_hd(fname)
-    elif platform == "xenium":
-        if args.bin is None:
-            args.bin = args.radius / 3
-        adata = load_xenium_binned(fname, args.bin)
-    else:
-        if os.path.exists(fname):
-            adata = sc.read_h5ad(fname)
-        else:
-            adata = getattr(sq.datasets, fname)()
-
-    adata.var_names_make_unique()
-
-    return adata
-
-
-def spatial_rkhs_gene_eigenmodes(
+def spatial_gene_eigenmodes(
     adata,
     output,
     n_components,
@@ -50,13 +25,13 @@ def spatial_rkhs_gene_eigenmodes(
     plot,
     verbose=False,
 ):
-    W, coords, gene_names, covariates = extract_visium_data(
+    W, coords, gene_names, covariates_matrix = read_anndata(
         adata, target_sum, transform, min_counts, min_spot_fraction, covariates
     )
 
     spot_operator = "sample" if spot_center else "none"
     sgkpca = SpatialGeneKPCA(radius, spot_operator, alpha, gene_center, verbose=verbose)
-    sgkpca.fit(W, coords, n_components, covariates=covariates)
+    sgkpca.fit(W, coords, n_components, covariates=covariates_matrix)
 
     adata.obsm["tanpopo_spot_modes"] = sgkpca.spot_modes[0]
     adata.varm["tanpopo_eigenvectors"] = sgkpca.eigenvectors
@@ -99,7 +74,7 @@ def parse_args():
         "--input",
         type=str,
         required=True,
-        help="Visium data path",
+        help="Input .h5ad-formatted hdf5 file with spatial basis information",
     )
     parser.add_argument(
         "-o",
@@ -117,12 +92,8 @@ def parse_args():
         "-r",
         "--radius",
         type=float,
+        required=True,
         help="Wendland kernel support radius",
-    )
-    parser.add_argument(
-        "--bin",
-        type=float,
-        help="Bin size (for xenium)",
     )
     parser.add_argument(
         "--transform",
@@ -146,12 +117,6 @@ def parse_args():
         type=int,
         default=1e4,
         help="Normalise each spot total to the target sum",
-    )
-    parser.add_argument(
-        "--platform",
-        type=str,
-        choices=["visium", "visiumhd", "xenium"],
-        help="Spatial platform.",
     )
     parser.add_argument(
         "--covariates",
@@ -201,11 +166,11 @@ def main():
     args = parse_args()
 
     with timed("Loading data", args.verbose):
-        adata = load_data(args.input, args.platform)
+        adata = sc.read_h5ad(args.input)
     if args.verbose:
         print(adata)
 
-    adata = spatial_rkhs_gene_eigenmodes(
+    adata = spatial_gene_eigenmodes(
         adata,
         args.output,
         args.components,

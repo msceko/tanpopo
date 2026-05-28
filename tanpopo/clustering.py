@@ -10,7 +10,7 @@ from tanpopo.utils import timed, argtop
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Spatial RKHS Gene Basis")
+    parser = argparse.ArgumentParser(description="Spatial eigenmode based clustering")
     parser.add_argument(
         "-i",
         "--input",
@@ -37,15 +37,15 @@ def parse_args():
         help="Leiden resolution",
     )
     parser.add_argument(
-        "--ngenes",
-        type=int,
-        help="Filter top n genes",
-    )
-    parser.add_argument(
         "--metric",
         type=str,
         default="cosine",
         help="Clustering metric",
+    )
+    parser.add_argument(
+        "--ngenes",
+        type=int,
+        help="Filter top n genes",
     )
     parser.add_argument(
         "--plot",
@@ -66,16 +66,17 @@ def parse_args():
 
 
 def setup(mode):
+    """Parse input"""
     args = parse_args()
     with timed("Loading data", args.verbose):
         adata = sc.read_h5ad(args.input)
 
+    # filter top n genes
     if args.ngenes:
-        idx = argtop(
-            (adata.varm["tanpopo_gene_scores"] ** 2).sum(1), args.ngenes, mode="pos"
-        )
+        idx = argtop((adata.varm["tanpopo_gene_scores"] ** 2).sum(1), args.ngenes, mode="pos")
         adata = adata[:, idx].copy()
 
+    # add dictionary for clustering metadata
     if adata.uns["tanpopo"].get("clustering") is None:
         adata.uns["tanpopo"]["clustering"] = {}
 
@@ -101,14 +102,13 @@ def cluster_leiden(X, n_neighbors=15, resolution=1.0, metric="cosine", random_st
         metric=metric,
         random_state=random_state,
     )
-    sc.tl.leiden(
-        adata, resolution=resolution, random_state=random_state, key_added="leiden"
-    )
+    sc.tl.leiden(adata, resolution=resolution, random_state=random_state, key_added="leiden")
     labels = adata.obs["leiden"].astype(int).to_numpy()
     return pd.Categorical(labels, ordered=True)
 
 
 def cluster_spots():
+    """Cluster spots based on spatial eigenmodes"""
     args, adata = setup("spots")
 
     with timed("Spot clustering", args.verbose):
@@ -144,6 +144,7 @@ def cluster_spots():
 
 
 def cluster_genes():
+    """Cluster genes based on eigendecomposition gene scores"""
     args, adata = setup("genes")
 
     with timed("Gene clustering", args.verbose):

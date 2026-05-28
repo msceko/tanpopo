@@ -6,6 +6,7 @@ from time import perf_counter
 import anndata as ad
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp
 from sklearn.preprocessing import normalize
 
 
@@ -83,6 +84,19 @@ def str2bool(arg):
         return False
     else:
         raise ValueError("Argument must be 'True' or 'False'")
+
+
+def get_counts_matrix(adata, sparse=True, layer=None):
+    """
+    Return the counts matrix from adata or adata.layers[layer].
+    Always returned as CSR sparse matrix.
+    """
+    X = adata.X if layer is None else adata.layers[layer]
+    if sparse and not sp.issparse(X):
+        X = sp.csr_matrix(X)
+    elif not sparse and sp.issparse(X):
+        X = X.toarray()
+    return X
 
 
 def order_by_label(labels):

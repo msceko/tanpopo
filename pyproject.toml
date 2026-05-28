@@ -19,7 +19,6 @@ dependencies = [
   "pandas",
   "anndata",
   "scanpy[leiden]",
-  "squidpy",
   "matplotlib"
 ]
 
