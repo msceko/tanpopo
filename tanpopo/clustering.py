@@ -4,33 +4,7 @@ import scanpy as sc
 import matplotlib.pyplot as plt
 
 from tanpopo.plot import plot_gene_clusters, plot_umap
-from tanpopo.utils import timed, argtop
-
-
-def cluster_cmd(args):
-    """Cluster spots or genes based on eigenmodes"""
-    with timed("Loading data", args.verbose):
-        adata = sc.read_h5ad(args.input)
-
-    # filter top n genes
-    if args.ngenes:
-        idx = argtop((adata.varm["tanpopo_gene_scores"] ** 2).sum(1), args.ngenes, mode="pos")
-        adata = adata[:, idx].copy()
-
-    # add dictionary for clustering metadata
-    if adata.uns["tanpopo"].get("clustering") is None:
-        adata.uns["tanpopo"]["clustering"] = {}
-
-    adata.uns["tanpopo"]["clustering"][args.by] = {
-        "n_neighbours": args.neighbours,
-        "resolution": args.resolution,
-        "metric": args.metric,
-    }
-
-    if args.by == "spots":
-        cluster_spots(args, adata)
-    else:
-        cluster_genes(args, adata)
+from tanpopo.utils import timed
 
 
 def cluster_leiden(X, n_neighbors=15, resolution=1.0, metric="cosine", random_state=0):
@@ -51,18 +25,15 @@ def cluster_leiden(X, n_neighbors=15, resolution=1.0, metric="cosine", random_st
     return pd.Categorical(labels, ordered=True)
 
 
-def cluster_spots(args, adata):
+def cluster_spots(adata, neighbours, resolution, metric, plot, umap, verbose):
     """Cluster spots based on spatial eigenmodes"""
 
-    with timed("Spot clustering", args.verbose):
+    with timed("Spot clustering", verbose):
         adata.obs["tanpopo_leiden"] = cluster_leiden(
-            adata.obsm["tanpopo_spot_modes"],
-            args.neighbours,
-            args.resolution,
-            args.metric,
+            adata.obsm["tanpopo_spot_modes"], neighbours, resolution, metric
         )
 
-    if args.plot:
+    if plot:
         ax = sc.pl.embedding(
             adata,
             basis="spatial",
@@ -73,40 +44,35 @@ def cluster_spots(args, adata):
         )
         ax.invert_yaxis()
         ax.axis("equal")
-    if args.umap:
+    if umap:
         plot_umap(
             adata.obsm["tanpopo_spot_modes"],
             adata.obs["tanpopo_leiden"],
             adata.obs_names,
-            args.neighbours,
+            neighbours,
         )
     plt.show()
 
-    if args.output:
-        adata.write(args.output)
+    return adata
 
 
-def cluster_genes(args, adata):
+def cluster_genes(adata, neighbours, resolution, metric, plot, umap, verbose):
     """Cluster genes based on eigendecomposition gene scores"""
 
-    with timed("Gene clustering", args.verbose):
+    with timed("Gene clustering", verbose):
         adata.var["tanpopo_leiden"] = cluster_leiden(
-            adata.varm["tanpopo_gene_scores"],
-            args.neighbours,
-            args.resolution,
-            args.metric,
+            adata.varm["tanpopo_gene_scores"], neighbours, resolution, metric
         )
 
-    if args.plot:
+    if plot:
         plot_gene_clusters(adata, key="tanpopo_leiden")
-    if args.umap:
+    if umap:
         plot_umap(
             adata.varm["tanpopo_gene_scores"],
             adata.var["tanpopo_leiden"],
             adata.var_names,
-            args.neighbours,
+            neighbours,
         )
     plt.show()
 
-    if args.output:
-        adata.write(args.output)
+    return adata
