@@ -13,6 +13,7 @@ authors = [
   { name = "Matthew Ceko", email = "matthew.ceko@petermac.org" }
 ]
 dependencies = [
+  "typer",
   "numpy",
   "scipy",
   "scikit-learn",
@@ -28,7 +29,7 @@ dev = [
 ]
 
 [project.scripts]
-tanpopo = "tanpopo.cli:main"
+tanpopo = "tanpopo.workflows:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
