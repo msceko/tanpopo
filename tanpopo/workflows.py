@@ -74,14 +74,14 @@ def fit(
         },
     }
 
-    breakpoint()
     if verbose:
-        print_top_genes_per_basis(sgkpca.eigenvectors, sgkpca.eigenvalues, gene_names)
+        print_top_genes_per_basis(
+            adata.varm["tanpopo_eigenvectors"], adata.varm["tanpopo_gene_loadings"], gene_names
+        )
     if output:
         adata.write(output)
     if plot:
-        for spot_mode in sgkpca.spot_modes:
-            plot_spatial_basis(adata, spot_mode, cmap="PiYG", vcenter=0)
+        plot_spatial_basis(adata, adata.obsm["tanpopo_spot_modes"], cmap="PiYG", vcenter=0)
         plt.show()
 
     return adata
@@ -126,6 +126,21 @@ def cluster(
 
     if output:
         adata.write(output)
+
+
+@app.command()
+def plot(fname: InputPath, verbose: Verbose = False):
+    """Plot spatial eigenmodes"""
+    with timed("Loading data", verbose):
+        adata = sc.read_h5ad(fname)
+    if verbose:
+        print_top_genes_per_basis(
+            adata.varm["tanpopo_eigenvectors"],
+            adata.varm["tanpopo_gene_loadings"],
+            adata.var_names,
+        )
+    plot_spatial_basis(adata, adata.obsm["tanpopo_spot_modes"], cmap="PiYG", vcenter=0)
+    plt.show()
 
 
 def main():
