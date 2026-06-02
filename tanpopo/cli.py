@@ -7,29 +7,9 @@ from typing import Annotated
 import typer
 
 
-class TransformTypes(str, Enum):
-    sqrt = "sqrt"
-    log1p = "log1p"
-
-
-class SpotOperatorTypes(str, Enum):
-    none = "none"
-    sample = "sample"
-    label = "label"
-
-
-class CovariateTypes(str, Enum):
-    log_total_counts = "log_total_counts"
-    log_detected_genes = "log_detected_genes"
-    mito_fraction = "mito_fraction"
-    ribo_fraction = "ribo_fraction"
-
-
-class ClusterTypes(str, Enum):
-    spots = "spots"
-    genes = "genes"
-
-
+# ------------------------------------------------------------------------------
+# IO
+# ------------------------------------------------------------------------------
 InputPath = Annotated[
     Path,
     typer.Option(
@@ -59,6 +39,22 @@ LabelKey = Annotated[
     str | None,
     typer.Option("--label-key", help="obs column defining labels/cell types."),
 ]
+
+
+# ------------------------------------------------------------------------------
+# Model
+# ------------------------------------------------------------------------------
+class SpotOperatorTypes(str, Enum):
+    none = "none"
+    sample = "sample"
+    label = "label"
+
+
+class ClusterTypes(str, Enum):
+    spots = "spots"
+    genes = "genes"
+
+
 Components = Annotated[
     int,
     typer.Option("--components", "-k", help="Number of spatial components."),
@@ -71,6 +67,31 @@ Alpha = Annotated[
     float,
     typer.Option("--alpha", help="Gene magnitude scaling exponent."),
 ]
+SpotOperator = Annotated[
+    SpotOperatorTypes,
+    typer.Option("--operator", help="Spot operator."),
+]
+GeneCenter = Annotated[
+    bool,
+    typer.Option("--gene-center/--no-gene-center", help="Center gene weights."),
+]
+
+
+# ------------------------------------------------------------------------------
+# Preprocessing
+# ------------------------------------------------------------------------------
+class TransformTypes(str, Enum):
+    sqrt = "sqrt"
+    log1p = "log1p"
+
+
+class CovariateTypes(str, Enum):
+    log_total_counts = "log_total_counts"
+    log_detected_genes = "log_detected_genes"
+    mito_fraction = "mito_fraction"
+    ribo_fraction = "ribo_fraction"
+
+
 Transform = Annotated[
     TransformTypes | None,
     typer.Option("--transform", help="Counts transform after normalisation."),
@@ -95,22 +116,10 @@ Covariates = Annotated[
         help="Covariate to correct for. Can be supplied multiple times.",
     ),
 ]
-SpotOperator = Annotated[
-    SpotOperatorTypes,
-    typer.Option("--operator", help="Spot operator."),
-]
-GeneCenter = Annotated[
-    bool,
-    typer.Option("--gene-center/--no-gene-center", help="Center gene weights."),
-]
-Plot = Annotated[
-    bool,
-    typer.Option("--plot", help="Plot results."),
-]
-Verbose = Annotated[
-    bool,
-    typer.Option("--verbose", help="Print timing information."),
-]
+
+# ------------------------------------------------------------------------------
+# Clustering
+# ------------------------------------------------------------------------------
 ClusterBy = Annotated[
     ClusterTypes,
     typer.Option("--by", help="Dimension to cluster."),
@@ -134,4 +143,16 @@ NGenes = Annotated[
 Umap = Annotated[
     bool,
     typer.Option("--umap", help="Compute and plot UMAP."),
+]
+
+# ------------------------------------------------------------------------------
+# Misc
+# ------------------------------------------------------------------------------
+Plot = Annotated[
+    bool,
+    typer.Option("--plot", help="Plot results."),
+]
+Verbose = Annotated[
+    bool,
+    typer.Option("--verbose", help="Print timing information."),
 ]
