@@ -2,9 +2,39 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Callable, TypeVar
 
 import typer
+
+E = TypeVar("E", bound=Enum)
+
+
+def comma_separated_enum(enum_cls: type[E]) -> Callable[[str | None], list[E] | None]:
+    valid = {item.value: item for item in enum_cls}
+    choices = ", ".join(str(item.value) for item in enum_cls)
+
+    def parser(value: str | None) -> list[E] | None:
+        if value is None:
+            return None
+
+        raw_values = [item.strip() for item in value.split(",")]
+
+        if any(item == "" for item in raw_values):
+            raise typer.BadParameter(f"Empty values are not allowed. Choices: {choices}")
+
+        invalid = [item for item in raw_values if item not in valid]
+        if invalid:
+            raise typer.BadParameter(
+                f"Invalid value(s): {', '.join(invalid)}. " f"Choose from: {choices}"
+            )
+
+        return [valid[item].value for item in raw_values]
+
+    return parser
+
+
+def enum_to_value(value):
+    return value.value
 
 
 # ------------------------------------------------------------------------------
@@ -39,6 +69,14 @@ LabelKey = Annotated[
     str | None,
     typer.Option("--label-key", help="obs column defining labels/cell types."),
 ]
+Labels = Annotated[
+    str | None,
+    typer.Option(
+        "--labels",
+        help="Subset spatial programs to label(s) (comma separated). "
+        "Omit for whole-sample analysis, use 'all' for every label in --label-key.",
+    ),
+]
 
 
 # ------------------------------------------------------------------------------
@@ -48,11 +86,6 @@ class SpotOperatorTypes(str, Enum):
     none = "none"
     sample = "sample"
     label = "label"
-
-
-class ClusterTypes(str, Enum):
-    spots = "spots"
-    genes = "genes"
 
 
 Components = Annotated[
@@ -69,7 +102,7 @@ Alpha = Annotated[
 ]
 SpotOperator = Annotated[
     SpotOperatorTypes,
-    typer.Option("--operator", help="Spot operator."),
+    typer.Option("--operator", callback=enum_to_value, help="Spot operator."),
 ]
 GeneCenter = Annotated[
     bool,
@@ -94,7 +127,9 @@ class CovariateTypes(str, Enum):
 
 Transform = Annotated[
     TransformTypes | None,
-    typer.Option("--transform", help="Counts transform after normalisation."),
+    typer.Option(
+        "--transform", callback=enum_to_value, help="Counts transform after normalisation."
+    ),
 ]
 MinCounts = Annotated[
     int | None,
@@ -109,20 +144,26 @@ TargetSum = Annotated[
     typer.Option("--target-sum", help="Per-spot normalisation target. Use 0 to disable."),
 ]
 Covariates = Annotated[
-    list[CovariateTypes] | None,
+    str | None,
     typer.Option(
-        "--covariate",
         "--covariates",
-        help="Covariate to correct for. Can be supplied multiple times.",
+        callback=comma_separated_enum(CovariateTypes),
+        help="Covariate(s) to correct for (comma separated).",
     ),
 ]
+
 
 # ------------------------------------------------------------------------------
 # Clustering
 # ------------------------------------------------------------------------------
+class ClusterTypes(str, Enum):
+    spots = "spots"
+    genes = "genes"
+
+
 ClusterBy = Annotated[
     ClusterTypes,
-    typer.Option("--by", help="Dimension to cluster."),
+    typer.Option("--by", callback=enum_to_value, help="Dimension to cluster."),
 ]
 Neighbours = Annotated[
     int,

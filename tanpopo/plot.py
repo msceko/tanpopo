@@ -37,22 +37,25 @@ def spatial_scatter(adata, keys, **kwargs):
         ax.axis("off")
 
 
-def plot_spatial_basis(adata, phi, prefix="spatial_mode", **kwargs):
-    """Plot spatial gene basis"""
+def plot_spatial_modes(adata, phi, prefix="spatial_mode", **kwargs):
+    """Plot spatial gene eigenmodes"""
+    empty_adata = ad.AnnData(X=np.empty(adata.shape), obs=adata.obs.copy(), var=adata.var.copy())
+    empty_adata.obsm["spatial"] = adata.obsm["spatial"]
+
     keys = []
     for k in range(phi.shape[1]):
         keys.append(f"{prefix}_{k}")
-        adata.obs[keys[k]] = phi[:, k]
+        empty_adata.obs[keys[k]] = phi[:, k]
 
-    spatial_scatter(adata, keys, **kwargs)
+    spatial_scatter(empty_adata, keys, **kwargs)
 
 
-def plot_spatial_basis_signed(adata, X, eigvecs):
-    """Plot positive and negative components of gene basis independently"""
+def plot_spatial_modes_signed(adata, X, eigvecs):
+    """Plot positive and negative components of gene eigenmodes independently"""
     phi_pos = project_spatial_basis(X, np.maximum(eigvecs, 0))
-    plot_spatial_basis(adata, phi_pos, "spatial_mode_positive")
+    plot_spatial_modes(adata, phi_pos, "spatial_mode_positive")
     phi_neg = project_spatial_basis(X, np.maximum(-eigvecs, 0))
-    plot_spatial_basis(adata, phi_neg, "spatial_mode_negative")
+    plot_spatial_modes(adata, phi_neg, "spatial_mode_negative")
 
 
 def plot_gene_clusters(adata, key="leiden", **kwargs):

@@ -1,14 +1,47 @@
+import numpy as np
+import pandas as pd
 import scanpy as sc
 import matplotlib.pyplot as plt
 import typer
 
-
-from tanpopo.data import read_anndata
+from tanpopo.data import preprocess_anndata
 from tanpopo.models import SpatialGeneKPCA
 from tanpopo.clustering import cluster_genes, cluster_spots
-from tanpopo.plot import plot_spatial_basis
+from tanpopo.plot import plot_spatial_modes
 from tanpopo.utils import timed, argtop, print_top_genes_per_basis
 from tanpopo.cli import *
+
+
+def pd_dtype(series: pd.Series):
+    if isinstance(series.dtype, pd.CategoricalDtype):
+        return series.cat.categories.dtype
+    return series.dtype
+
+
+def _require_obs_key(adata, key, option):
+    if key is None:
+        raise typer.BadParameter(f"{option} is required for this workflow.")
+    if key not in adata.obs:
+        raise typer.BadParameter(f"{option}={key} is not present in adata.obs.")
+    return key
+
+
+def _parse_labels(adata, labels, key):
+    if labels is None:
+        return [""]
+
+    all_labels = list(adata.obs[key].unique())
+    if labels == "all":
+        return all_labels
+
+    dtype = pd_dtype(adata.obs[key])
+    obs_labels = np.array([label.strip() for label in labels.split(",")], dtype)
+    not_in_obs = set(obs_labels) - set(all_labels)
+    if not_in_obs:
+        not_in_obs = ",".join(not_in_obs)
+        raise typer.BadParameter(f"--labels={not_in_obs} not in adata.obs['{key}'].")
+    return obs_labels
+
 
 app = typer.Typer(
     name="tanpopo",
@@ -19,11 +52,14 @@ app = typer.Typer(
 
 
 @app.command()
-def fit(
+def programs(
     fname: InputPath,
     radius: Radius,
     output: OutputPath = None,
     n_components: Components = 8,
+    layer: Layer = None,
+    label_key: LabelKey = None,
+    labels: Labels = None,
     transform: Transform = TransformTypes.log1p,
     min_counts: MinCounts = 10,
     min_spot_fraction: MinSpotFraction = None,
@@ -40,24 +76,16 @@ def fit(
         adata = sc.read_h5ad(fname)
     if verbose:
         print(adata)
-    W, coords, gene_names, covariates_matrix = read_anndata(
-        adata,
-        target_sum,
-        transform,
-        min_counts,
-        min_spot_fraction,
-        covariates,
+    W, coords, gene_names, covariates_matrix = preprocess_anndata(
+        adata, target_sum, transform, min_counts, min_spot_fraction, covariates, layer
     )
 
-    sgkpca = SpatialGeneKPCA(radius, spot_operator, alpha, gene_center, verbose=verbose)
-    sgkpca.fit(W, coords, n_components, covariates=covariates_matrix)
+    if labels is not None:
+        _require_obs_key(adata, label_key, "--label-key")
+    obs_labels = _parse_labels(adata, labels, label_key)
 
-    adata.obsm["tanpopo_spot_modes"] = sgkpca.spot_modes[0]
-    adata.varm["tanpopo_eigenvectors"] = sgkpca.eigenvectors
-    adata.varm["tanpopo_gene_loadings"] = sgkpca.gene_loadings
-    adata.varm["tanpopo_gene_scores"] = sgkpca.gene_scores
+    model = SpatialGeneKPCA(radius, spot_operator, alpha, gene_center, verbose=verbose)
     adata.uns["tanpopo"] = {
-        "eigenvalues": sgkpca.eigenvalues,
         "preprocessing": {
             "target_sum": target_sum,
             "transform": transform,
@@ -66,22 +94,38 @@ def fit(
         },
         "cfg": {
             "kernel": "wendland_c2",
-            "radius": sgkpca.radius,
-            "alpha": sgkpca.alpha,
-            "spot_operator": sgkpca.spot_operator,
-            "gene_center": sgkpca.gene_center,
+            "radius": model.radius,
+            "alpha": model.alpha,
+            "spot_operator": model.spot_operator,
+            "gene_center": model.gene_center,
             "covariates": covariates,
         },
     }
+    for label in obs_labels:
+        mask = (adata.obs[label_key] == label).to_numpy() if labels else slice(None)
+        key = f"_{str(label).replace(' ', '_')}" if labels else ""
 
-    if verbose:
-        print_top_genes_per_basis(
-            adata.varm["tanpopo_eigenvectors"], adata.varm["tanpopo_gene_loadings"], gene_names
-        )
+        model.fit(W[mask], coords[mask], n_components, covariates=covariates_matrix)
+
+        full_mode = np.full((adata.n_obs, model.spot_modes[0].shape[1]), np.nan)
+        full_mode[mask] = model.spot_modes[0]
+        adata.obsm[f"tanpopo{key}_spot_modes"] = full_mode
+        adata.varm[f"tanpopo{key}_eigenvectors"] = model.eigenvectors
+        adata.varm[f"tanpopo{key}_gene_loadings"] = model.gene_loadings
+        adata.varm[f"tanpopo{key}_gene_scores"] = model.gene_scores
+        adata.uns["tanpopo"][f"eigenvalues{key}"] = model.eigenvalues
+
+        if verbose:
+            if labels:
+                print(f"\n{label_key}: {label}")
+            print_top_genes_per_basis(model.eigenvectors, model.eigenvalues, gene_names)
+        if plot:
+            size = 120000 / adata.n_obs
+            plot_spatial_modes(adata[mask], full_mode[mask], cmap="coolwarm", vcenter=0, size=size)
+
     if output:
         adata.write(output)
     if plot:
-        plot_spatial_basis(adata, adata.obsm["tanpopo_spot_modes"], cmap="PiYG", vcenter=0)
         plt.show()
 
     return adata
@@ -139,7 +183,7 @@ def plot(fname: InputPath, verbose: Verbose = False):
             adata.varm["tanpopo_gene_loadings"],
             adata.var_names,
         )
-    plot_spatial_basis(adata, adata.obsm["tanpopo_spot_modes"], cmap="PiYG", vcenter=0)
+    plot_spatial_modes(adata, adata.obsm["tanpopo_spot_modes"], cmap="coolwarm", vcenter=0)
     plt.show()
 
 

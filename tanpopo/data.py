@@ -10,7 +10,7 @@ from tanpopo.kernel import kernel_matrix_sparse
 from tanpopo.utils import as_list, get_counts_matrix
 
 
-def read_anndata(
+def preprocess_anndata(
     adata,
     target_sum=1e4,
     transform=None,
