@@ -49,7 +49,7 @@ def compute_ribo_fraction(X_counts, gene_names, eps=1e-12):
     return ribo_counts / (total_counts + eps)
 
 
-def extract_covariates(adata, covariates, layer=None):
+def compute_covariates(adata, covariates, layer=None, key="tanpopo_covariates"):
     """
     Extract a spot-by-covariate matrix from pre-normalized counts in adata.
 
@@ -92,4 +92,4 @@ def extract_covariates(adata, covariates, layer=None):
                 "'mito_fraction', 'ribo_fraction'."
             )
 
-    return np.column_stack(covariate_cols).astype(np.float64, copy=False)
+    adata.obsm[key] = np.column_stack(covariate_cols).astype(np.float64, copy=False)

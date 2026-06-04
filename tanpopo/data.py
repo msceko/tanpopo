@@ -5,9 +5,26 @@ import numpy as np
 import scanpy as sc
 import scipy.sparse as sp
 
-from tanpopo.covariates import extract_covariates
+from tanpopo.covariates import compute_covariates
 from tanpopo.kernel import kernel_matrix_sparse
 from tanpopo.utils import as_list, get_counts_matrix
+
+
+def filter_anndata(adata, min_counts=10, min_spot_fraction=0.01):
+    if min_counts:
+        sc.pp.filter_genes(adata, min_counts=min_counts)
+    if min_spot_fraction:
+        min_spots = int(min_spot_fraction * len(adata.obs))
+        sc.pp.filter_genes(adata, min_cells=min_spots)
+
+
+def transform_anndata(adata, target_sum=1e4, transform=None):
+    if target_sum:
+        sc.pp.normalize_total(adata, target_sum=target_sum)
+    if transform == "log1p":
+        sc.pp.log1p(adata)
+    elif transform == "sqrt":
+        sc.pp.sqrt(adata)
 
 
 def preprocess_anndata(
@@ -21,32 +38,19 @@ def preprocess_anndata(
     sparse=True,
 ):
     """
-    Returns:
-        X : (n_spots, n_genes) expression matrix
-        coords : (n_spots, 2) spatial coordinates
-        gene_names
+    Filter genes, compute covariates and transform anndata
     """
-    if min_counts:
-        sc.pp.filter_genes(adata, min_counts=min_counts)
-    if min_spot_fraction:
-        min_spots = int(min_spot_fraction * len(adata.obs))
-        sc.pp.filter_genes(adata, min_cells=min_spots)
+    filter_anndata(adata, min_counts, min_spot_fraction)
+    if covariates:
+        compute_covariates(adata, covariates, layer)
+    transform_anndata(adata, target_sum, transform)
 
-    covariate_matrix = extract_covariates(adata, covariates, layer) if covariates else None
 
-    if target_sum:
-        sc.pp.normalize_total(adata, target_sum=target_sum)
-    if transform == "log1p":
-        sc.pp.log1p(adata)
-    elif transform == "sqrt":
-        sc.pp.sqrt(adata)
-
+def get_spatial_from_anndata(adata, layer=None, spatial_key="spatial", sparse=True):
     X = get_counts_matrix(adata, sparse, layer)
-
-    coords = adata.obsm["spatial"].astype(np.float64)
-    gene_names = np.array(adata.var_names)
-
-    return X, coords, gene_names, covariate_matrix
+    coords = adata.obsm[spatial_key].astype(np.float64)
+    covariates = adata.obsm.get("tanpopo_covariates", None)
+    return X, coords, covariates
 
 
 @dataclass

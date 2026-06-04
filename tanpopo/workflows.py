@@ -4,7 +4,7 @@ import scanpy as sc
 import matplotlib.pyplot as plt
 import typer
 
-from tanpopo.data import preprocess_anndata
+from tanpopo.data import preprocess_anndata, get_spatial_from_anndata
 from tanpopo.models import SpatialGeneKPCA
 from tanpopo.clustering import cluster_genes, cluster_spots
 from tanpopo.plot import plot_spatial_modes
@@ -74,11 +74,11 @@ def programs(
     """Fit spatial eigenmodes"""
     with timed("Loading data", verbose):
         adata = sc.read_h5ad(fname)
+        preprocess_anndata(
+            adata, target_sum, transform, min_counts, min_spot_fraction, covariates, layer
+        )
     if verbose:
         print(adata)
-    W, coords, gene_names, covariates_matrix = preprocess_anndata(
-        adata, target_sum, transform, min_counts, min_spot_fraction, covariates, layer
-    )
 
     if subset_labels is not None or spot_operator == "label":
         _require_obs_key(adata, label_key, "--label-key")
@@ -106,7 +106,8 @@ def programs(
         mask = (adata.obs[label_key] == label).to_numpy() if subset_labels else slice(None)
         key = f"_{str(label).replace(' ', '_')}" if subset_labels else ""
 
-        model.fit(W[mask], coords[mask], n_components, labels, covariates_matrix)
+        W, coords, covariates_matrix = get_spatial_from_anndata(adata[mask], layer)
+        model.fit(W, coords, n_components, labels, covariates_matrix)
 
         full_mode = np.full((adata.n_obs, model.spot_modes[0].shape[1]), np.nan)
         full_mode[mask] = model.spot_modes[0]
@@ -119,7 +120,7 @@ def programs(
         if verbose:
             if subset_labels:
                 print(f"\n{label_key}: {label}")
-            print_top_genes_per_basis(model.eigenvectors, model.eigenvalues, gene_names)
+            print_top_genes_per_basis(model.eigenvectors, model.eigenvalues, adata.var_names)
         if plot:
             size = 120000 / adata.n_obs
             plot_spatial_modes(adata[mask], full_mode[mask], cmap="coolwarm", vcenter=0, size=size)
