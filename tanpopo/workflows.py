@@ -4,8 +4,12 @@ import scanpy as sc
 import matplotlib.pyplot as plt
 import typer
 
-from tanpopo.data import preprocess_anndata, get_spatial_from_anndata
-from tanpopo.models import SpatialGeneKPCA
+from tanpopo.data import (
+    preprocess_anndata,
+    preprocess_anndata_shared_genes,
+    get_spatial_from_anndata,
+)
+from tanpopo.models import SpatialGeneKPCA, SpatialGeneSampleCombinedKPCA
 from tanpopo.clustering import cluster_genes, cluster_spots
 from tanpopo.plot import plot_spatial_modes
 from tanpopo.utils import timed, argtop, print_top_genes_per_basis
@@ -43,11 +47,33 @@ def _parse_labels(adata, labels, key):
     return obs_labels
 
 
+def _name_samples(fnames, sample_names):
+    if sample_names is None:
+        sample_names = [fname.stem for fname in fnames]
+    if len(sample_names) != len(fnames):
+        raise typer.BadParameter(f"Supply exactly one --sample-name for each --input.")
+    if len(sample_names) != len(set(sample_names)):
+        raise typer.BadParameter("Sample names must be unique.")
+    return sample_names
+
+
+def _concat_adata_samples(adatas, sample_names):
+    if len(adatas) == 1:
+        return adatas[0].copy()
+    return sc.concat(
+        adatas,
+        label="sample",
+        keys=[str(x) for x in sample_names],
+        index_unique="-",
+        join="inner",
+        merge="unique",
+    )
+
+
 app = typer.Typer(
     name="tanpopo",
     help="Spatial gene eigenmode workflows for spatial transcriptomics.",
     no_args_is_help=True,
-    context_settings={"help_option_names": ["-h", "--help"]},
 )
 
 
@@ -95,11 +121,12 @@ def programs(
         },
         "cfg": {
             "kernel": "wendland_c2",
-            "radius": model.radius,
-            "alpha": model.alpha,
-            "spot_operator": model.spot_operator,
-            "gene_center": model.gene_center,
+            "radius": radius,
+            "alpha": alpha,
+            "spot_operator": spot_operator,
+            "gene_center": gene_center,
             "covariates": covariates,
+            "label_key": label_key,
         },
     }
     for label in obs_labels:
@@ -131,6 +158,97 @@ def programs(
         plt.show()
 
     return adata
+
+
+@app.command()
+def shared_programs(
+    fnames: InputPaths,
+    radius: Radius,
+    output: OutputPath = None,
+    sample_names: SampleNames = None,
+    n_components: Components = 8,
+    layer: Layer = None,
+    label_key: LabelKey = None,
+    transform: Transform = TransformTypes.log1p,
+    min_counts: MinCounts = 10,
+    min_spot_fraction: MinSpotFraction = None,
+    target_sum: TargetSum = 1e4,
+    covariates: Covariates = None,
+    alpha: Alpha = 1.0,
+    spot_operator: SpotOperator = SpotOperatorTypes.sample,
+    sample_weighting: SampleWeighting = SampleWeightingTypes.trace,
+    normalise_by: SampleNormaliseBy = SampleNormaliseTypes.sample,
+    gene_center: GeneCenter = False,
+    plot: Plot = False,
+    verbose: Verbose = False,
+):
+    """Fit shared spatial eigenmodes across multiple samples"""
+    with timed("Loading data", verbose):
+        adata_samples = [sc.read_h5ad(fname) for fname in fnames]
+        preprocess_anndata_shared_genes(
+            adata_samples, target_sum, transform, min_counts, min_spot_fraction, covariates, layer
+        )
+        sample_names = _name_samples(fnames, sample_names)
+    if verbose:
+        for adata, name in zip(adata_samples, sample_names):
+            print(name)
+            print(adata)
+
+    W, coords, covariates_matrix, labels = [], [], [], [] if spot_operator == "label" else None
+    for adata in adata_samples:
+        w, pts, cov = get_spatial_from_anndata(adata, layer)
+        W.append(w)
+        coords.append(pts)
+        covariates_matrix.append(cov)
+
+        if spot_operator == "label":
+            _require_obs_key(adata, label_key, "--label-key")
+            labels.append(adata.obs[label_key])
+
+    model = SpatialGeneSampleCombinedKPCA(
+        radius, spot_operator, sample_weighting, normalise_by, alpha, gene_center, verbose=verbose
+    ).fit(W, coords, n_components, labels, covariates)
+
+    for adata, name, spot_mode, gene_loadings in zip(
+        adata_samples, sample_names, model.spot_modes, model.gene_loadings
+    ):
+        adata.obsm["tanpopo_spot_modes"] = spot_mode
+        adata.varm[f"tanpopo_{name}_gene_loadings"] = gene_loadings
+        if plot:
+            plot_spatial_modes(adata, spot_mode, cmap="coolwarm", vcenter=0)
+
+    adata_samples = _concat_adata_samples(adata_samples, sample_names)
+    adata_samples.varm["tanpopo_eigenvectors"] = model.eigenvectors
+    adata_samples.varm["tanpopo_gene_scores"] = model.gene_scores
+    adata_samples.uns["tanpopo"] = {
+        "eigenvalues": model.eigenvalues,
+        "sample_names": sample_names,
+        "sample_coefficients": model.sample_coefficients_,
+        "preprocessing": {
+            "target_sum": target_sum,
+            "transform": transform,
+            "min_counts": min_counts,
+            "min_spot_fraction": min_spot_fraction,
+        },
+        "cfg": {
+            "kernel": "wendland_c2",
+            "radius": radius,
+            "alpha": alpha,
+            "spot_operator": spot_operator,
+            "sample_weighting": sample_weighting,
+            "normalise_by": normalise_by,
+            "gene_center": gene_center,
+            "covariates": covariates,
+            "label_key": label_key,
+        },
+    }
+
+    if verbose:
+        print_top_genes_per_basis(model.eigenvectors, model.eigenvalues, adata_samples.var_names)
+    if output:
+        adata_samples.write(output)
+    if plot:
+        plt.show()
 
 
 @app.command()

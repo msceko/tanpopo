@@ -51,6 +51,17 @@ InputPath = Annotated[
         readable=True,
     ),
 ]
+InputPaths = Annotated[
+    list[Path],
+    typer.Option(
+        "--input",
+        "-i",
+        help="Input .h5ad file. Supply once per sample for multi-sample workflows.",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+    ),
+]
 OutputPath = Annotated[
     Path | None,
     typer.Option(
@@ -77,6 +88,13 @@ Labels = Annotated[
         "Omit for whole-sample analysis, use 'all' for every label in --label-key.",
     ),
 ]
+SampleNames = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--name",
+        help="Name for each --input, in the same order. Defaults to input file stems.",
+    ),
+]
 
 
 # ------------------------------------------------------------------------------
@@ -86,6 +104,17 @@ class SpotOperatorTypes(str, Enum):
     none = "none"
     sample = "sample"
     label = "label"
+
+
+class SampleWeightingTypes(str, Enum):
+    none = "none"
+    n_spots = "n_spots"
+    trace = "trace"
+
+
+class SampleNormaliseTypes(str, Enum):
+    sample = "sample"
+    pooled = "pooled"
 
 
 Components = Annotated[
@@ -107,6 +136,18 @@ SpotOperator = Annotated[
 GeneCenter = Annotated[
     bool,
     typer.Option("--gene-center/--no-gene-center", help="Center gene weights."),
+]
+SampleWeighting = Annotated[
+    SampleWeightingTypes,
+    typer.Option("--sample-weighting", callback=enum_to_value, help="How to balance samples."),
+]
+SampleNormaliseBy = Annotated[
+    SampleNormaliseTypes,
+    typer.Option(
+        "--normalise-by",
+        callback=enum_to_value,
+        help="Gene scaling reference for sample-wise models.",
+    ),
 ]
 
 

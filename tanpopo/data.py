@@ -35,7 +35,6 @@ def preprocess_anndata(
     min_spot_fraction=0.01,
     covariates=None,
     layer=None,
-    sparse=True,
 ):
     """
     Filter genes, compute covariates and transform anndata
@@ -44,6 +43,32 @@ def preprocess_anndata(
     if covariates:
         compute_covariates(adata, covariates, layer)
     transform_anndata(adata, target_sum, transform)
+
+
+def preprocess_anndata_shared_genes(
+    adata_list,
+    target_sum=1e4,
+    transform=None,
+    min_counts=10,
+    min_spot_fraction=0.01,
+    covariates=None,
+    layer=None,
+):
+    """
+    Filter genes, compute covariates and transform anndata
+    All anndata objects are filtered to have the same gene set
+    """
+    genes = set(adata_list[0].var_names)
+    for adata in adata_list:
+        filter_anndata(adata, min_counts, min_spot_fraction)
+        genes &= set(adata.var_names)
+
+    genes = [gene for gene in adata_list[0].var_names if gene in genes]
+    for i, adata in enumerate(adata_list):
+        adata_list[i] = adata[:, genes].copy()
+        if covariates:
+            compute_covariates(adata, covariates, layer)
+        transform_anndata(adata, target_sum, transform)
 
 
 def get_spatial_from_anndata(adata, layer=None, spatial_key="spatial", sparse=True):
