@@ -59,7 +59,7 @@ def programs(
     n_components: Components = 8,
     layer: Layer = None,
     label_key: LabelKey = None,
-    labels: Labels = None,
+    subset_labels: Labels = None,
     transform: Transform = TransformTypes.log1p,
     min_counts: MinCounts = 10,
     min_spot_fraction: MinSpotFraction = None,
@@ -80,9 +80,10 @@ def programs(
         adata, target_sum, transform, min_counts, min_spot_fraction, covariates, layer
     )
 
-    if labels is not None:
+    if subset_labels is not None or spot_operator == "label":
         _require_obs_key(adata, label_key, "--label-key")
-    obs_labels = _parse_labels(adata, labels, label_key)
+    obs_labels = _parse_labels(adata, subset_labels, label_key)
+    labels = adata.obs[label_key] if spot_operator == "label" and subset_labels is None else None
 
     model = SpatialGeneKPCA(radius, spot_operator, alpha, gene_center, verbose=verbose)
     adata.uns["tanpopo"] = {
@@ -102,10 +103,10 @@ def programs(
         },
     }
     for label in obs_labels:
-        mask = (adata.obs[label_key] == label).to_numpy() if labels else slice(None)
-        key = f"_{str(label).replace(' ', '_')}" if labels else ""
+        mask = (adata.obs[label_key] == label).to_numpy() if subset_labels else slice(None)
+        key = f"_{str(label).replace(' ', '_')}" if subset_labels else ""
 
-        model.fit(W[mask], coords[mask], n_components, covariates=covariates_matrix)
+        model.fit(W[mask], coords[mask], n_components, labels, covariates_matrix)
 
         full_mode = np.full((adata.n_obs, model.spot_modes[0].shape[1]), np.nan)
         full_mode[mask] = model.spot_modes[0]
@@ -116,7 +117,7 @@ def programs(
         adata.uns["tanpopo"][f"eigenvalues{key}"] = model.eigenvalues
 
         if verbose:
-            if labels:
+            if subset_labels:
                 print(f"\n{label_key}: {label}")
             print_top_genes_per_basis(model.eigenvectors, model.eigenvalues, gene_names)
         if plot:
