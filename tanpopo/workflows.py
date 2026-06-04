@@ -9,7 +9,7 @@ from tanpopo.data import (
     preprocess_anndata_shared_genes,
     get_spatial_from_anndata,
 )
-from tanpopo.models import SpatialGeneKPCA, SpatialGeneSampleCombinedKPCA
+from tanpopo.models import SpatialGeneKPCA, SpatialGeneContrastKPCA, SpatialGeneSampleCombinedKPCA
 from tanpopo.clustering import cluster_genes, cluster_spots
 from tanpopo.plot import plot_spatial_modes
 from tanpopo.utils import timed, argtop, print_top_genes_per_basis
@@ -78,7 +78,7 @@ app = typer.Typer(
 
 
 @app.command()
-def programs(
+def spatial_programs(
     fname: InputPath,
     radius: Radius,
     output: OutputPath = None,
@@ -97,7 +97,7 @@ def programs(
     plot: Plot = False,
     verbose: Verbose = False,
 ):
-    """Fit spatial eigenmodes"""
+    """Spatial gene programs in a sample, optionally within labels."""
     with timed("Loading data", verbose):
         adata = sc.read_h5ad(fname)
         preprocess_anndata(
@@ -157,8 +157,6 @@ def programs(
     if plot:
         plt.show()
 
-    return adata
-
 
 @app.command()
 def shared_programs(
@@ -182,7 +180,7 @@ def shared_programs(
     plot: Plot = False,
     verbose: Verbose = False,
 ):
-    """Fit shared spatial eigenmodes across multiple samples"""
+    """Shared spatial gene programs across multiple samples."""
     with timed("Loading data", verbose):
         adata_samples = [sc.read_h5ad(fname) for fname in fnames]
         preprocess_anndata_shared_genes(
@@ -252,6 +250,75 @@ def shared_programs(
 
 
 @app.command()
+def marker_programs(
+    fname: InputPath,
+    radius: Radius,
+    label_key: LabelKey,
+    output: OutputPath = None,
+    n_components: Components = 8,
+    layer: Layer = None,
+    transform: Transform = TransformTypes.log1p,
+    min_counts: MinCounts = 10,
+    min_spot_fraction: MinSpotFraction = None,
+    target_sum: TargetSum = 1e4,
+    covariates: Covariates = None,
+    alpha: Alpha = 1.0,
+    gene_center: GeneCenter = False,
+    plot: Plot = False,
+    verbose: Verbose = False,
+):
+    """Marker gene programs that distinguish labelled domains or cell types."""
+    with timed("Loading data", verbose):
+        adata = sc.read_h5ad(fname)
+        preprocess_anndata(
+            adata, target_sum, transform, min_counts, min_spot_fraction, covariates, layer
+        )
+    if verbose:
+        print(adata)
+
+    _require_obs_key(adata, label_key, "--label-key")
+    W, coords, covariates_matrix = get_spatial_from_anndata(adata, layer)
+    labels = adata.obs[label_key]
+
+    model = SpatialGeneContrastKPCA.between_labels(
+        radius=radius,
+        alpha=alpha,
+        gene_center=gene_center,
+        verbose=verbose,
+    ).fit(W, coords, n_components, labels, covariates_matrix)
+
+    adata.obsm["tanpopo_spot_modes"] = model.spot_modes[0]
+    adata.varm[f"tanpopo_gene_loadings"] = model.gene_loadings
+    adata.varm["tanpopo_eigenvectors"] = model.eigenvectors
+    adata.varm["tanpopo_gene_scores"] = model.gene_scores
+    adata.uns["tanpopo"] = {
+        "eigenvalues": model.eigenvalues,
+        "preprocessing": {
+            "target_sum": target_sum,
+            "transform": transform,
+            "min_counts": min_counts,
+            "min_spot_fraction": min_spot_fraction,
+        },
+        "cfg": {
+            "kernel": "wendland_c2",
+            "radius": radius,
+            "alpha": alpha,
+            "gene_center": gene_center,
+            "covariates": covariates,
+            "label_key": label_key,
+        },
+    }
+
+    if verbose:
+        print_top_genes_per_basis(model.eigenvectors, model.eigenvalues, adata.var_names)
+    if output:
+        adata.write(output)
+    if plot:
+        plot_spatial_modes(adata, model.spot_modes[0], cmap="coolwarm", vcenter=0)
+        plt.show()
+
+
+@app.command()
 def cluster(
     fname: InputPath,
     by: ClusterBy,
@@ -264,7 +331,7 @@ def cluster(
     umap: Umap = False,
     verbose: Verbose = False,
 ):
-    """Cluster spots or genes based on eigenmodes"""
+    """Cluster spots or genes based on spatial gene programs."""
     with timed("Loading data", verbose):
         adata = sc.read_h5ad(fname)
 
@@ -294,7 +361,7 @@ def cluster(
 
 @app.command()
 def plot(fname: InputPath, verbose: Verbose = False):
-    """Plot spatial eigenmodes"""
+    """Plot spatial gene programs."""
     with timed("Loading data", verbose):
         adata = sc.read_h5ad(fname)
     if verbose:
