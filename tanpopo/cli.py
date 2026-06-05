@@ -62,6 +62,28 @@ InputPaths = Annotated[
         readable=True,
     ),
 ]
+InputPathsA = Annotated[
+    list[Path],
+    typer.Option(
+        "--input-a",
+        "-ia",
+        help="Input .h5ad file for group A.",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+    ),
+]
+InputPathsB = Annotated[
+    list[Path],
+    typer.Option(
+        "--input-b",
+        "-ib",
+        help="Input .h5ad file for group B.",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+    ),
+]
 OutputPath = Annotated[
     Path | None,
     typer.Option(
