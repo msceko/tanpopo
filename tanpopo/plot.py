@@ -3,8 +3,8 @@ import numpy as np
 import scanpy as sc
 import matplotlib.pyplot as plt
 
-from tanpopo.basis import project_spatial_basis
-from tanpopo.utils import make_iterable, cumulative_contribution
+from tanpopo.analysis import cumulative_contribution
+from tanpopo.utils import make_iterable
 
 
 def spatial_scatter(adata, keys, **kwargs):
@@ -48,14 +48,6 @@ def plot_spatial_modes(adata, phi, prefix="spatial_mode", **kwargs):
         empty_adata.obs[keys[k]] = phi[:, k]
 
     spatial_scatter(empty_adata, keys, **kwargs)
-
-
-def plot_spatial_modes_signed(adata, X, eigvecs):
-    """Plot positive and negative components of gene eigenmodes independently"""
-    phi_pos = project_spatial_basis(X, np.maximum(eigvecs, 0))
-    plot_spatial_modes(adata, phi_pos, "spatial_mode_positive")
-    phi_neg = project_spatial_basis(X, np.maximum(-eigvecs, 0))
-    plot_spatial_modes(adata, phi_neg, "spatial_mode_negative")
 
 
 def plot_gene_clusters(adata, key="leiden", **kwargs):

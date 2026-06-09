@@ -3,11 +3,9 @@ from contextlib import contextmanager
 from functools import wraps
 from time import perf_counter
 
-import anndata as ad
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp
-from sklearn.preprocessing import normalize
 
 
 def vector_or_matrix(method):
@@ -86,106 +84,10 @@ def str2bool(arg):
         raise ValueError("Argument must be 'True' or 'False'")
 
 
-def get_counts_matrix(adata, sparse=True, layer=None):
-    """
-    Return the counts matrix from adata or adata.layers[layer].
-    Always returned as CSR sparse matrix.
-    """
-    X = adata.X if layer is None else adata.layers[layer]
-    if sparse and not sp.issparse(X):
-        X = sp.csr_matrix(X)
-    elif not sparse and sp.issparse(X):
-        X = X.toarray()
-    return X
-
-
-def order_by_label(labels):
-    """
-    Reorder by label so each label block is contiguous.
-
-    Returns
-    -------
-    order : (n_rows,) int ndarray
-        Permutation applied within the sample.
-    offsets : (n_blocks,) int ndarray
-        Block start offsets after reordering.
-    lengths : (n_blocks,) int ndarray
-        Block lengths after reordering.
-    """
-    n_rows = len(labels)
-    order = np.arange(n_rows, dtype=np.int64)
-
-    _, codes = np.unique(labels, return_inverse=True)
-    order = np.argsort(codes, kind="stable")
-    grouped_codes = codes[order]
-
-    starts = np.flatnonzero(np.r_[True, grouped_codes[1:] != grouped_codes[:-1]])
-    stops = np.r_[starts[1:], n_rows]
-    lengths = stops - starts
-
-    return order, starts.astype(np.int64), lengths.astype(np.int64)
-
-
-def normalise_gene_weights(X):
-    """Normalise columns to sum to 1"""
-    return normalize(X, norm="l1", axis=0)
-
-
-def quad_form(applyS, a):
-    """Compute a^T S a using only S@a."""
-    Sa = applyS(a.reshape(-1, 1)).ravel()
-    return float(a @ Sa)
-
-
-def bin_spatial_basis(
-    adata,
-    prefix="spatial_basis_",
-    bin_size=16,
-    reducer="mean",  # "mean" or "median"
-):
-    """Bin spatial basis vectors for plotting"""
-    # find all matching obs columns
-    basis_cols = [c for c in adata.obs.columns if c.startswith(prefix)]
-    if not basis_cols:
-        raise KeyError(f"No adata.obs columns start with {prefix!r}")
-
-    xy = np.asarray(adata.obsm["spatial"])
-    bx = np.floor_divide(xy[:, 0], bin_size).astype(np.int32)
-    by = np.floor_divide(xy[:, 1], bin_size).astype(np.int32)
-    bin_id = bx.astype(str) + "_" + by.astype(str)
-
-    # build a compact dataframe: coords + only the columns you need
-    df = pd.DataFrame(
-        {
-            "bin": bin_id,
-            "x": xy[:, 0],
-            "y": xy[:, 1],
-        },
-        index=adata.obs_names,
-    )
-    df[basis_cols] = adata.obs[basis_cols].to_numpy()  # avoids pandas alignment surprises
-
-    g = df.groupby("bin", sort=False)
-
-    # bin centroids
-    coords = g[["x", "y"]].mean()
-
-    # reduce each basis column per bin
-    if reducer == "mean":
-        vals = g[basis_cols].mean()
-    elif reducer == "median":
-        vals = g[basis_cols].median()
-    else:
-        raise ValueError("reducer must be 'mean' or 'median'")
-
-    # minimal AnnData for plotting
-    out = ad.AnnData(X=np.zeros((coords.shape[0], 0), dtype=np.float32))
-    out.obsm["spatial"] = coords.to_numpy()
-    out.obs = vals  # includes all spatial_basis_* columns
-    out.obs_names = coords.index.astype(str)
-    out.uns["spatial"] = adata.uns.get("spatial", {})
-
-    return out, basis_cols
+def pd_dtype(series: pd.Series):
+    if isinstance(series.dtype, pd.CategoricalDtype):
+        return series.cat.categories.dtype
+    return series.dtype
 
 
 def argtop(v, n_top, mode):
@@ -202,102 +104,14 @@ def argtop(v, n_top, mode):
     return idx[:n_top]
 
 
-def top_scored_genes(scores, genes, n_top, mode="pos"):
-    idx = argtop(scores, n_top, mode)
-    return list(genes[idx]), list(scores[idx])
-
-
-def top_genes_per_basis(eigvecs, genes, n_top, mode="abs"):
-    """Compute top genes for each gene basis"""
-    top_genes = []
-    for k in range(eigvecs.shape[1]):
-        idx = argtop(eigvecs[:, k], n_top, mode)
-        top_genes.append({genes[i]: eigvecs[i, k] for i in idx})
-    return top_genes
-
-
-def print_top_genes(scores, genes, n_top):
-    top_genes, top_scores = top_scored_genes(scores, genes, n_top)
-    for gene, score in zip(top_genes, top_scores):
-        print(f"{gene:15s} {score:+.3f}")
-
-
-def print_top_genes_per_basis(eigvecs, eigvals, genes, n_top=8):
-    """Print top genes for each gene basis"""
-    # top_genes = top_genes_per_basis(eigvecs, genes, n_top)
-    # for k in range(eigvecs.shape[1]):
-    #     print(f"\nBasis {k} (λ = {eigvals[k]:.4f})")
-    #     for g, w in top_genes[k].items():
-    #         print(f"{g:15s} {w:+.3f}")
-
-    top_genes_abs = top_genes_per_basis(eigvecs, genes, n_top, "abs")
-    top_genes_pos = top_genes_per_basis(eigvecs, genes, n_top, "pos")
-    top_genes_neg = top_genes_per_basis(eigvecs, genes, n_top, "neg")
-    for k in range(eigvecs.shape[1]):
-        print(f"\nEigenmode {k} (λ = {eigvals[k]:.4f})")
-        for (g_abs, w_abs), (g_pos, w_pos), (g_neg, w_neg) in zip(
-            top_genes_abs[k].items(), top_genes_pos[k].items(), top_genes_neg[k].items()
-        ):
-            print(f"{g_abs:15s} {w_abs:+.3f}", end="  |  ")
-            print(f"{g_pos:15s} {w_pos:+.3f}", end="  |  ")
-            print(f"{g_neg:15s} {w_neg:+.3f}")
-
-
-def cumulative_contribution(eigvecs):
-    """Cumulative squared-loading contribution curve for one component"""
-    sq_sorted = np.sort(eigvecs**2, axis=0)[::-1]
-    return np.cumsum(sq_sorted, axis=0) / sq_sorted.sum(0)
-
-
-def choose_k_by_energy(eigvals, energy=0.9):
+def get_counts_matrix(adata, sparse=True, layer=None):
     """
-    Choose smallest k such that cumulative explained 'kernel variance' >= energy.
-    Using eigvals of centered Gram.
+    Return the counts matrix from adata or adata.layers[layer].
+    Always returned as CSR sparse matrix.
     """
-    if eigvals.size == 0:
-        return 0
-    cum = np.cumsum(eigvals)
-    total = cum[-1]
-    if total <= 0:
-        return 0
-    k = int(np.searchsorted(cum / total, energy) + 1)
-    return k
-
-
-def choose_k_by_elbow(eigvals, k_max=None):
-    """
-    Lightweight elbow finder on log-eigvals curve:
-    pick k where second-difference is most negative (strongest curvature).
-    """
-    if eigvals.size < 3:
-        return int(eigvals.size)
-    if k_max is None:
-        k_max = eigvals.size
-    y = np.log(np.clip(eigvals[:k_max], 1e-30, None))
-    # discrete second derivative
-    d2 = y[:-2] - 2 * y[1:-1] + y[2:]
-    k = int(np.argmin(d2) + 2)  # +2 to map to component index (1-based)
-    return max(2, min(k, k_max))
-
-
-def choose_k(eigvals, method="auto", energy=0.9, k_max=50):
-    """
-    method:
-      - "energy": energy threshold
-      - "elbow": curvature elbow
-      - "auto": min(elbow, energy-based) with sensible bounds
-    """
-    eigvals = np.asarray(eigvals, dtype=np.float64)
-    eigvals = eigvals[: min(k_max, eigvals.size)]
-    if eigvals.size == 0:
-        return 0
-
-    k_e = choose_k_by_energy(eigvals, energy=energy)
-    k_l = choose_k_by_elbow(eigvals, k_max=eigvals.size)
-
-    if method == "energy":
-        return k_e
-    if method == "elbow":
-        return k_l
-    # auto: take the more conservative (smaller) but at least 2
-    return int(max(2, min(k_e, k_l, eigvals.size)))
+    X = adata.X if layer is None else adata.layers[layer]
+    if sparse and not sp.issparse(X):
+        X = sp.csr_matrix(X)
+    elif not sparse and sp.issparse(X):
+        X = X.toarray()
+    return X

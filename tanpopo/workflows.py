@@ -1,5 +1,4 @@
 import numpy as np
-import pandas as pd
 import scanpy as sc
 import matplotlib.pyplot as plt
 import typer
@@ -18,14 +17,9 @@ from tanpopo.models import (
 )
 from tanpopo.clustering import cluster_genes, cluster_spots
 from tanpopo.plot import plot_spatial_modes
-from tanpopo.utils import timed, argtop, print_top_genes_per_basis
+from tanpopo.utils import timed, argtop, pd_dtype
+from tanpopo.analysis import print_top_genes_per_basis
 from tanpopo.cli import *
-
-
-def pd_dtype(series: pd.Series):
-    if isinstance(series.dtype, pd.CategoricalDtype):
-        return series.cat.categories.dtype
-    return series.dtype
 
 
 def _require_obs_key(adata, key, option):
