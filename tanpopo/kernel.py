@@ -1,8 +1,26 @@
+import warnings
+
 import numpy as np
-import scipy.sparse as sp
-from scipy.sparse.linalg import LinearOperator
 from scipy.spatial.distance import cdist
 from sklearn.neighbors import NearestNeighbors
+
+
+def _check_radius(coords, radius, K, threshold=0.5):
+    """Check that the chosen radius does not produce points with no neighbours"""
+    n_points = coords.shape[0]
+    row_counts = np.diff(K.indptr)
+    has_self = K.diagonal() == 0
+    nonself_counts = row_counts - has_self.astype(row_counts.dtype)
+    isolated = nonself_counts == 0
+    isolated_fraction = isolated.mean() if n_points else 0.0
+    if isolated_fraction > threshold:
+        warnings.warn(
+            f"radius={radius} produced no non-self neighbors for "
+            f"{isolated.sum()} / {n_points} points "
+            f"({isolated_fraction:.1%}). The resulting kernel matrix will be "
+            "mostly isolated diagonal/self entries. Consider increasing `radius`.",
+            UserWarning,
+        )
 
 
 def gaussian_kernel(coords, sigma):
@@ -45,6 +63,7 @@ def kernel_matrix_sparse(coords, radius, symmetrize=True):
     nn.fit(coords)
 
     K = nn.radius_neighbors_graph(coords, mode="distance")  # CSR
+    _check_radius(coords, radius, K)
     K.data = wendland_c2(K.data / radius)
 
     if symmetrize:

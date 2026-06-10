@@ -91,8 +91,8 @@ app = typer.Typer(
 @app.command()
 def spatial_programs(
     fname: InputPath,
-    radius: Radius,
     output: OutputPath = None,
+    radius: Radius = 150,
     n_components: Components = 8,
     layer: Layer = None,
     label_key: LabelKey = None,
@@ -172,8 +172,8 @@ def spatial_programs(
 @app.command()
 def shared_programs(
     fnames: InputPaths,
-    radius: Radius,
     output: OutputPath = None,
+    radius: Radius = 150,
     sample_names: SampleNames = None,
     n_components: Components = 8,
     layer: Layer = None,
@@ -264,9 +264,9 @@ def shared_programs(
 @app.command()
 def differential_label_programs(
     fname: InputPath,
-    radius: Radius,
     label_key: LabelKey,
     output: OutputPath = None,
+    radius: Radius = 150,
     n_components: Components = 8,
     layer: Layer = None,
     transform: Transform = TransformTypes.log1p,
@@ -368,8 +368,8 @@ def differential_label_programs(
 def differential_sample_programs(
     fnames_a: InputPathsA,
     fnames_b: InputPathsB,
-    radius: Radius,
     output: OutputPath = None,
+    radius: Radius = 150,
     sample_names: SampleNames = None,
     n_components: Components = 8,
     layer: Layer = None,
@@ -471,9 +471,9 @@ def differential_sample_programs(
 @app.command()
 def marker_programs(
     fname: InputPath,
-    radius: Radius,
     label_key: LabelKey,
     output: OutputPath = None,
+    radius: Radius = 150,
     n_components: Components = 8,
     layer: Layer = None,
     transform: Transform = TransformTypes.log1p,
@@ -507,7 +507,7 @@ def marker_programs(
     ).fit(W, coords, n_components, labels, covariates_matrix)
 
     adata.obsm["tanpopo_spot_modes"] = model.spot_modes[0]
-    adata.varm[f"tanpopo_gene_loadings"] = model.gene_loadings
+    adata.varm["tanpopo_gene_loadings"] = model.gene_loadings
     adata.varm["tanpopo_eigenvectors"] = model.eigenvectors
     adata.varm["tanpopo_gene_scores"] = model.gene_scores
     adata.uns["tanpopo"] = {
