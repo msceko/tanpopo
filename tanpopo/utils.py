@@ -69,6 +69,11 @@ def as_list(x):
     return list(x) if isinstance(x, (list, tuple)) else [x]
 
 
+def as_value(x):
+    """Enum to value"""
+    return x.value if x is not None else None
+
+
 def all_equal(X):
     """Check if all elements in list X are equal"""
     return all(x == X[0] for x in X)

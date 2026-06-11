@@ -25,54 +25,35 @@ def cluster_leiden(X, n_neighbors=15, resolution=1.0, metric="cosine", random_st
     return pd.Categorical(labels, ordered=True)
 
 
-def cluster_spots(adata, neighbours, resolution, metric, plot, umap, verbose):
+def cluster_spots(adata, neighbours, resolution, metric, key, key_added, plot, umap, verbose):
     """Cluster spots based on spatial eigenmodes"""
 
     with timed("Spot clustering", verbose):
-        adata.obs["tanpopo_leiden"] = cluster_leiden(
-            adata.obsm["tanpopo_spot_modes"], neighbours, resolution, metric
-        )
+        adata.obs[key_added] = cluster_leiden(adata.obsm[key], neighbours, resolution, metric)
 
     if plot:
         ax = sc.pl.embedding(
-            adata,
-            basis="spatial",
-            color="tanpopo_leiden",
-            palette="tab20",
-            frameon=False,
-            show=False,
+            adata, basis="spatial", color=key_added, palette="tab20", frameon=False, show=False
         )
         ax.invert_yaxis()
         ax.axis("equal")
     if umap:
-        plot_umap(
-            adata.obsm["tanpopo_spot_modes"],
-            adata.obs["tanpopo_leiden"],
-            adata.obs_names,
-            neighbours,
-        )
+        plot_umap(adata.obsm[key], adata.obs[key_added], adata.obs_names, neighbours)
     plt.show()
 
     return adata
 
 
-def cluster_genes(adata, neighbours, resolution, metric, plot, umap, verbose):
+def cluster_genes(adata, neighbours, resolution, metric, key, key_added, plot, umap, verbose):
     """Cluster genes based on eigendecomposition gene scores"""
 
     with timed("Gene clustering", verbose):
-        adata.var["tanpopo_leiden"] = cluster_leiden(
-            adata.varm["tanpopo_gene_scores"], neighbours, resolution, metric
-        )
+        adata.var[key_added] = cluster_leiden(adata.varm[key], neighbours, resolution, metric)
 
     if plot:
-        plot_gene_clusters(adata, key="tanpopo_leiden")
+        plot_gene_clusters(adata, key=key_added)
     if umap:
-        plot_umap(
-            adata.varm["tanpopo_gene_scores"],
-            adata.var["tanpopo_leiden"],
-            adata.var_names,
-            neighbours,
-        )
+        plot_umap(adata.varm[key], adata.var[key_added], adata.var_names, neighbours)
     plt.show()
 
     return adata

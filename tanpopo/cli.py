@@ -33,10 +33,6 @@ def comma_separated_enum(enum_cls: type[E]) -> Callable[[str | None], list[E] | 
     return parser
 
 
-def enum_to_value(value):
-    return value.value
-
-
 # ------------------------------------------------------------------------------
 # IO
 # ------------------------------------------------------------------------------
@@ -67,7 +63,7 @@ InputPathsA = Annotated[
     typer.Option(
         "--input-a",
         "-ia",
-        help="Input .h5ad file for group A.",
+        help="Input .h5ad file for group A. Can be specified multiple times.",
         exists=True,
         dir_okay=False,
         readable=True,
@@ -78,7 +74,7 @@ InputPathsB = Annotated[
     typer.Option(
         "--input-b",
         "-ib",
-        help="Input .h5ad file for group B.",
+        help="Input .h5ad file for group B. Can be specified multiple times.",
         exists=True,
         dir_okay=False,
         readable=True,
@@ -153,7 +149,7 @@ Alpha = Annotated[
 ]
 SpotOperator = Annotated[
     SpotOperatorTypes,
-    typer.Option("--operator", callback=enum_to_value, help="Spot operator."),
+    typer.Option("--operator", help="Spot operator."),
 ]
 GeneCenter = Annotated[
     bool,
@@ -161,13 +157,12 @@ GeneCenter = Annotated[
 ]
 SampleWeighting = Annotated[
     SampleWeightingTypes,
-    typer.Option("--sample-weighting", callback=enum_to_value, help="How to balance samples."),
+    typer.Option("--sample-weighting", help="How to balance samples."),
 ]
 SampleNormaliseBy = Annotated[
     SampleNormaliseTypes,
     typer.Option(
         "--normalise-by",
-        callback=enum_to_value,
         help="Gene scaling reference for sample-wise models.",
     ),
 ]
@@ -190,9 +185,7 @@ class CovariateTypes(str, Enum):
 
 Transform = Annotated[
     TransformTypes | None,
-    typer.Option(
-        "--transform", callback=enum_to_value, help="Counts transform after normalisation."
-    ),
+    typer.Option("--transform", help="Counts transform after normalisation."),
 ]
 MinCounts = Annotated[
     int | None,
@@ -226,7 +219,7 @@ class ClusterTypes(str, Enum):
 
 ClusterBy = Annotated[
     ClusterTypes,
-    typer.Option("--by", callback=enum_to_value, help="Dimension to cluster."),
+    typer.Option("--by", help="Dimension to cluster."),
 ]
 Neighbours = Annotated[
     int,
@@ -252,6 +245,14 @@ Umap = Annotated[
 # ------------------------------------------------------------------------------
 # Misc
 # ------------------------------------------------------------------------------
+ExperimentId = Annotated[
+    str,
+    typer.Option(
+        "--experiment-id",
+        "-id",
+        help=("Experiment ID used to namespace Tanpopo outputs. Defaults to the workflow name."),
+    ),
+]
 Plot = Annotated[
     bool,
     typer.Option("--plot", help="Plot results."),
