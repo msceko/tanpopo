@@ -85,6 +85,7 @@ app = typer.Typer(
     name="tanpopo",
     help="Spatial gene eigenmode workflows for spatial transcriptomics.",
     no_args_is_help=True,
+    context_settings={"help_option_names": ["-h", "--help"]},
 )
 
 
@@ -151,6 +152,7 @@ def spatial_programs(
         adata.varm[f"tanpopo{key}_eigenvectors"] = model.eigenvectors
         adata.varm[f"tanpopo{key}_gene_loadings"] = model.gene_loadings
         adata.varm[f"tanpopo{key}_gene_scores"] = model.gene_scores
+        adata.var[f"tanpopo{key}_gene_scores"] = model.gene_spatial_scores()
         adata.uns["tanpopo"][f"eigenvalues{key}"] = model.eigenvalues
 
         if verbose:
@@ -167,6 +169,7 @@ def spatial_programs(
         adata.write(output)
     if plot:
         plt.show()
+    return adata
 
 
 @app.command()
@@ -230,6 +233,7 @@ def shared_programs(
     adata_samples = _concat_adata_samples(adata_samples, sample_names)
     adata_samples.varm["tanpopo_eigenvectors"] = model.eigenvectors
     adata_samples.varm["tanpopo_gene_scores"] = model.gene_scores
+    adata_samples.var["tanpopo_gene_scores"] = model.gene_spatial_scores()
     adata_samples.uns["tanpopo"] = {
         "eigenvalues": model.eigenvalues,
         "sample_names": sample_names,
@@ -259,6 +263,7 @@ def shared_programs(
         adata_samples.write(output)
     if plot:
         plt.show()
+    return adata
 
 
 @app.command()
@@ -347,6 +352,7 @@ def differential_label_programs(
         adata.varm[f"tanpopo{key}_eigenvectors"] = model.eigenvectors
         adata.varm[f"tanpopo{key}_gene_loadings"] = model.gene_loadings[0]
         adata.varm[f"tanpopo{key}_gene_scores"] = model.gene_scores
+        adata.var[f"tanpopo{key}_gene_scores"] = model.gene_spatial_scores()
         adata.uns["tanpopo"][f"eigenvalues{key}"] = model.eigenvalues
 
         if verbose:
@@ -362,6 +368,7 @@ def differential_label_programs(
         adata.write(output)
     if plot:
         plt.show()
+    return adata
 
 
 @app.command()
@@ -436,6 +443,7 @@ def differential_sample_programs(
     adata_samples = _concat_adata_samples(adata_samples, sample_names)
     adata_samples.varm["tanpopo_eigenvectors"] = model.eigenvectors
     adata_samples.varm["tanpopo_gene_scores"] = model.gene_scores
+    adata_samples.var["tanpopo_gene_scores"] = model.gene_spatial_scores()
     adata_samples.uns["tanpopo"] = {
         "eigenvalues": model.eigenvalues,
         "sample_names_group_A": [sample_names[i] for i in idx_a],
@@ -466,6 +474,7 @@ def differential_sample_programs(
         adata_samples.write(output)
     if plot:
         plt.show()
+    return adata
 
 
 @app.command()
@@ -510,6 +519,7 @@ def marker_programs(
     adata.varm["tanpopo_gene_loadings"] = model.gene_loadings
     adata.varm["tanpopo_eigenvectors"] = model.eigenvectors
     adata.varm["tanpopo_gene_scores"] = model.gene_scores
+    adata.var["tanpopo_gene_scores"] = model.gene_spatial_scores()
     adata.uns["tanpopo"] = {
         "eigenvalues": model.eigenvalues,
         "preprocessing": {
@@ -535,6 +545,58 @@ def marker_programs(
     if plot:
         plot_spatial_modes(adata, model.spot_modes[0], cmap="coolwarm", vcenter=0)
         plt.show()
+    return adata
+
+
+@app.command()
+def gene_scores(
+    fname: InputPath,
+    output: OutputPath = None,
+    radius: Radius = 150,
+    n_components: Components = 8,
+    layer: Layer = None,
+    label_key: LabelKey = None,
+    subset_labels: Labels = None,
+    transform: Transform = TransformTypes.log1p,
+    min_counts: MinCounts = 10,
+    min_spot_fraction: MinSpotFraction = None,
+    target_sum: TargetSum = 1e4,
+    covariates: Covariates = None,
+    alpha: Alpha = 1.0,
+    spot_operator: SpotOperator = SpotOperatorTypes.sample,
+    gene_center: GeneCenter = False,
+    verbose: Verbose = False,
+):
+    """Score genes by spatial structure."""
+    adata = spatial_programs(
+        fname,
+        output,
+        radius,
+        n_components,
+        layer,
+        label_key,
+        subset_labels,
+        transform,
+        min_counts,
+        min_spot_fraction,
+        target_sum,
+        covariates,
+        alpha,
+        spot_operator,
+        gene_center,
+    )
+    obs_labels = _parse_labels(adata, subset_labels, label_key)
+    order = np.argsort(adata.var["tanpopo_gene_scores"])[::-1]
+
+    if verbose:
+        for label in obs_labels:
+            if subset_labels:
+                print(f"\n{label_key}: {label}")
+            top = order[: min(20, len(order))]
+            for i in top:
+                print(f"{adata.var_names[i]:15s} {adata.var["tanpopo_gene_scores"][i]:.2f}")
+
+    return adata
 
 
 @app.command()
@@ -568,7 +630,7 @@ def cluster(
 
     # filter top n genes
     if ngenes:
-        idx = argtop((adata.varm["tanpopo_gene_scores"] ** 2).sum(1), ngenes, mode="pos")
+        idx = argtop(adata.var["tanpopo_gene_scores"], ngenes, mode="pos")
         adata = adata[:, idx].copy()
 
     # add dictionary for clustering metadata
