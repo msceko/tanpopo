@@ -18,12 +18,29 @@ def name_samples(fnames, sample_names):
 
 
 def load_preprocess_sample(
-    fname, target_sum, transform, min_counts, min_spot_fraction, covariates, layer, verbose=False
+    fname,
+    target_sum,
+    transform,
+    min_counts,
+    min_spot_fraction,
+    covariates,
+    exclude=None,
+    label_key=None,
+    layer=None,
+    verbose=False,
 ):
     with timed("Loading data", verbose):
         adata = sc.read_h5ad(fname)
         preprocess_anndata(
-            adata, target_sum, transform, min_counts, min_spot_fraction, covariates, layer
+            adata,
+            target_sum,
+            transform,
+            min_counts,
+            min_spot_fraction,
+            covariates,
+            exclude,
+            label_key,
+            layer,
         )
     if verbose:
         print(adata)
@@ -38,7 +55,9 @@ def load_preprocess_samples(
     min_counts,
     min_spot_fraction,
     covariates,
-    layer,
+    exclude=None,
+    label_key=None,
+    layer=None,
     verbose=False,
 ):
     with timed("Loading data", verbose):
@@ -50,6 +69,8 @@ def load_preprocess_samples(
             min_counts,
             min_spot_fraction,
             covariates,
+            exclude,
+            label_key,
             layer,
         )
         sample_names = name_samples(fnames, sample_names)
@@ -60,13 +81,16 @@ def load_preprocess_samples(
     return adata_samples, sample_names
 
 
-def preprocess_cfg(target_sum, transform, min_counts, min_spot_fraction, covariates, layer):
+def preprocess_cfg(
+    target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
+):
     return {
         "target_sum": target_sum,
         "transform": as_value(transform),
         "min_counts": min_counts,
         "min_spot_fraction": min_spot_fraction,
         "covariates": covariates,
+        "label_key": label_key,
         "layer": layer,
     }
 
@@ -95,11 +119,9 @@ def model_cfg(
     return cfg
 
 
-def add_metadata(adata, cmd_id, preprocessing, model, label_key, extra=None):
+def add_metadata(adata, cmd_id, preprocessing, model, extra=None):
     adata.uns.setdefault("tanpopo", {}).setdefault(cmd_id, {})
-    adata.uns["tanpopo"][cmd_id].update(
-        {"preprocessing": preprocessing, "model": model, "label_key": label_key}
-    )
+    adata.uns["tanpopo"][cmd_id].update({"preprocessing": preprocessing, "model": model})
     if extra:
         adata.uns["tanpopo"][cmd_id].update(extra)
 

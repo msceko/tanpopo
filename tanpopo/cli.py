@@ -106,6 +106,10 @@ Labels = Annotated[
         "Omit for whole-sample analysis, use 'all' for every label in --label-key.",
     ),
 ]
+Exclude = Annotated[
+    str | None,
+    typer.Option("--exclude", help="Label(s) to exclude from analysis (comma separated)."),
+]
 SampleNames = Annotated[
     list[str] | None,
     typer.Option(

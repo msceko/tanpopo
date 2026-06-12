@@ -81,7 +81,7 @@ app = typer.Typer(
 )
 
 
-@app.command()
+@app.command(no_args_is_help=True)
 def spatial_programs(
     fname: InputPath,
     output: OutputPath = None,
@@ -91,6 +91,7 @@ def spatial_programs(
     layer: Layer = None,
     label_key: LabelKey = None,
     subset_labels: Labels = None,
+    exclude: Exclude = None,
     transform: Transform = TransformTypes.log1p,
     min_counts: MinCounts = 10,
     min_spot_fraction: MinSpotFraction = None,
@@ -103,19 +104,20 @@ def spatial_programs(
     verbose: Verbose = False,
 ):
     """Spatial gene programs in a sample, optionally within labels."""
+    exclude_labels = [l.strip() for l in exclude.split(",")] if exclude is not None else None
     pre_args = preprocess_cfg(
-        target_sum, transform, min_counts, min_spot_fraction, covariates, layer
+        target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
     model_args = model_cfg(radius, alpha, gene_center, spot_operator)
 
-    adata = load_preprocess_sample(fname, verbose=verbose, **pre_args)
+    adata = load_preprocess_sample(fname, exclude=exclude_labels, verbose=verbose, **pre_args)
     if subset_labels is not None or spot_operator == "label":
         _require_obs_key(adata, label_key, "--label-key")
     obs_labels = _parse_labels(adata, subset_labels, label_key)
     labels = adata.obs[label_key] if spot_operator == "label" and subset_labels is None else None
 
     model = SpatialGeneKPCA(verbose=verbose, **model_args)
-    add_metadata(adata, cmd_id, pre_args, model_args, label_key)
+    add_metadata(adata, cmd_id, pre_args, model_args)
 
     for label in obs_labels:
         mask = (adata.obs[label_key] == label).to_numpy() if subset_labels else slice(None)
@@ -142,7 +144,7 @@ def spatial_programs(
     return adata
 
 
-@app.command()
+@app.command(no_args_is_help=True)
 def shared_programs(
     fnames: InputPaths,
     output: OutputPath = None,
@@ -152,6 +154,7 @@ def shared_programs(
     n_components: Components = 8,
     layer: Layer = None,
     label_key: LabelKey = None,
+    exclude: Exclude = None,
     transform: Transform = TransformTypes.log1p,
     min_counts: MinCounts = 10,
     min_spot_fraction: MinSpotFraction = None,
@@ -167,15 +170,19 @@ def shared_programs(
 ):
     """Shared spatial gene programs across multiple samples."""
     _require_multi_input(fnames, "shared-programs")
+    exclude_labels = [l.strip() for l in exclude.split(",")] if exclude is not None else None
     pre_args = preprocess_cfg(
-        target_sum, transform, min_counts, min_spot_fraction, covariates, layer
+        target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
     model_args = model_cfg(
         radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
     )
+
     adata_samples, sample_names = load_preprocess_samples(
-        fnames, sample_names, verbose=verbose, **pre_args
+        fnames, sample_names, exclude=exclude_labels, verbose=verbose, **pre_args
     )
+    if spot_operator == "label":
+        _require_obs_key(adata_samples, label_key, "--label-key")
     W, coords, covariates_matrix, labels = _get_spatial_inputs_for_samples(
         adata_samples, layer, spot_operator, label_key
     )
@@ -183,10 +190,9 @@ def shared_programs(
     model = SpatialGeneSampleCombinedKPCA(verbose=verbose, **model_args).fit(
         W, coords, n_components, labels, covariates_matrix
     )
-
     adata_samples = store_multi_sample_result(adata_samples, sample_names, model, cmd_id, plot)
     extra = {"sample_names": sample_names, "sample_coefficients": model.sample_coefficients_}
-    add_metadata(adata_samples, cmd_id, pre_args, model_args, label_key, extra)
+    add_metadata(adata_samples, cmd_id, pre_args, model_args, extra)
 
     if verbose:
         print_top_genes_per_basis(model.eigenvectors, model.eigenvalues, adata_samples.var_names)
@@ -197,7 +203,7 @@ def shared_programs(
     return adata_samples
 
 
-@app.command()
+@app.command(no_args_is_help=True)
 def differential_label_programs(
     fname: InputPath,
     label_key: LabelKey,
@@ -206,6 +212,7 @@ def differential_label_programs(
     radius: Radius = 150,
     n_components: Components = 8,
     layer: Layer = None,
+    exclude: Exclude = None,
     transform: Transform = TransformTypes.log1p,
     min_counts: MinCounts = 10,
     min_spot_fraction: MinSpotFraction = None,
@@ -220,13 +227,15 @@ def differential_label_programs(
     verbose: Verbose = False,
 ):
     """Differential gene programs enriched in one label versus the rest."""
+    exclude_labels = [l.strip() for l in exclude.split(",")] if exclude is not None else None
     pre_args = preprocess_cfg(
-        target_sum, transform, min_counts, min_spot_fraction, covariates, layer
+        target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
     model_args = model_cfg(
         radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
     )
-    adata = load_preprocess_sample(fname, verbose=verbose, **pre_args)
+
+    adata = load_preprocess_sample(fname, exclude=exclude_labels, verbose=verbose, **pre_args)
     _require_obs_key(adata, label_key, "--label-key")
     obs_labels = adata.obs[label_key].unique()
     W, coords, covariates_matrix = get_spatial_from_anndata(adata, layer)
@@ -234,7 +243,7 @@ def differential_label_programs(
     model = SpatialGeneSampleContrastKPCA(
         positive_samples=[0], negative_samples=[1], verbose=verbose, **model_args
     )
-    add_metadata(adata, cmd_id, pre_args, model_args, label_key)
+    add_metadata(adata, cmd_id, pre_args, model_args)
 
     for label in obs_labels:
         mask = (adata.obs[label_key] == label).to_numpy()
@@ -270,7 +279,7 @@ def differential_label_programs(
     return adata
 
 
-@app.command()
+@app.command(no_args_is_help=True)
 def differential_sample_programs(
     fnames_a: InputPathsA,
     fnames_b: InputPathsB,
@@ -281,6 +290,7 @@ def differential_sample_programs(
     n_components: Components = 8,
     layer: Layer = None,
     label_key: LabelKey = None,
+    exclude: Exclude = None,
     transform: Transform = TransformTypes.log1p,
     min_counts: MinCounts = 10,
     min_spot_fraction: MinSpotFraction = None,
@@ -298,14 +308,16 @@ def differential_sample_programs(
     fnames = fnames_a + fnames_b
     n_a, n_b = len(fnames_a), len(fnames_b)
     idx_a, idx_b = range(n_a), range(n_a, n_a + n_b)
+    exclude_labels = [l.strip() for l in exclude.split(",")] if exclude is not None else None
     pre_args = preprocess_cfg(
-        target_sum, transform, min_counts, min_spot_fraction, covariates, layer
+        target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
     model_args = model_cfg(
         radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
     )
+
     adata_samples, sample_names = load_preprocess_samples(
-        fnames, sample_names, verbose=verbose, **pre_args
+        fnames, sample_names, exclude=exclude_labels, verbose=verbose, **pre_args
     )
     W, coords, covariates_matrix, labels = _get_spatial_inputs_for_samples(
         adata_samples, layer, spot_operator, label_key
@@ -322,7 +334,7 @@ def differential_sample_programs(
         "sample_names_group_B": [sample_names[i] for i in idx_b],
         "sample_coefficients": model.sample_coefficients_,
     }
-    add_metadata(adata_samples, cmd_id, pre_args, model_args, label_key, extra)
+    add_metadata(adata_samples, cmd_id, pre_args, model_args, extra)
 
     if verbose:
         print_top_genes_per_basis(model.eigenvectors, model.eigenvalues, adata_samples.var_names)
@@ -333,7 +345,7 @@ def differential_sample_programs(
     return adata_samples
 
 
-@app.command()
+@app.command(no_args_is_help=True)
 def marker_programs(
     fname: InputPath,
     label_key: LabelKey,
@@ -342,6 +354,7 @@ def marker_programs(
     radius: Radius = 150,
     n_components: Components = 8,
     layer: Layer = None,
+    exclude: Exclude = None,
     transform: Transform = TransformTypes.log1p,
     min_counts: MinCounts = 10,
     min_spot_fraction: MinSpotFraction = None,
@@ -353,11 +366,13 @@ def marker_programs(
     verbose: Verbose = False,
 ):
     """Marker gene programs that distinguish labelled domains or cell types."""
+    exclude_labels = [l.strip() for l in exclude.split(",")] if exclude is not None else None
     pre_args = preprocess_cfg(
-        target_sum, transform, min_counts, min_spot_fraction, covariates, layer
+        target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
     model_args = model_cfg(radius, alpha, gene_center)
-    adata = load_preprocess_sample(fname, verbose=verbose, **pre_args)
+
+    adata = load_preprocess_sample(fname, exclude=exclude_labels, verbose=verbose, **pre_args)
     _require_obs_key(adata, label_key, "--label-key")
     W, coords, covariates_matrix = get_spatial_from_anndata(adata, layer)
     labels = adata.obs[label_key]
@@ -365,7 +380,7 @@ def marker_programs(
     model = SpatialGeneContrastKPCA.between_labels(verbose=verbose, **model_args).fit(
         W, coords, n_components, labels, covariates_matrix
     )
-    add_metadata(adata, cmd_id, pre_args, model_args, label_key)
+    add_metadata(adata, cmd_id, pre_args, model_args)
     store_sample_result(adata, model, cmd_id)
 
     if verbose:
@@ -388,6 +403,7 @@ def gene_scores(
     layer: Layer = None,
     label_key: LabelKey = None,
     subset_labels: Labels = None,
+    exclude: Exclude = None,
     transform: Transform = TransformTypes.log1p,
     min_counts: MinCounts = 10,
     min_spot_fraction: MinSpotFraction = None,
@@ -408,6 +424,7 @@ def gene_scores(
         layer,
         label_key,
         subset_labels,
+        exclude,
         transform,
         min_counts,
         min_spot_fraction,
@@ -433,7 +450,7 @@ def gene_scores(
     return adata
 
 
-@app.command()
+@app.command(no_args_is_help=True)
 def estimate_spacing(fname: InputPath):
     """Compute average distance to closest neighbour."""
     with timed("Loading data", enabled=True):
@@ -445,7 +462,7 @@ def estimate_spacing(fname: InputPath):
     print(f"Average neighbour distance = {avg_dist:.2f}")
 
 
-@app.command()
+@app.command(no_args_is_help=True)
 def h5ad_summary(fname: InputPath):
     """View all anndata annotations."""
     with timed("Loading data", enabled=True):
@@ -455,11 +472,11 @@ def h5ad_summary(fname: InputPath):
             experiment_ids = ", ".join(f"'{key}'" for key in adata.uns["tanpopo"].keys())
             print("    uns['tanpopo']: " + experiment_ids)
 
-            for key, val in adata.uns["tanpopo"].items():
-                print(f"    uns['tanpopo']['{key}']: ", val)
+            # for key, val in adata.uns["tanpopo"].items():
+            #     print(f"    uns['tanpopo']['{key}']: ", val)
 
 
-@app.command()
+@app.command(no_args_is_help=True)
 def cluster(
     fname: InputPath,
     by: ClusterBy,
@@ -483,8 +500,7 @@ def cluster(
         adata = adata[:, idx].copy()
 
     # add dictionary for clustering metadata
-    if adata.uns["tanpopo"].get("clustering") is None:
-        adata.uns["tanpopo"]["clustering"] = {}
+    adata.uns["tanpopo"].setdefault("clustering", {})
 
     adata.uns["tanpopo"]["clustering"][by] = {
         "n_neighbours": neighbours,
@@ -503,7 +519,7 @@ def cluster(
         adata.write(output)
 
 
-@app.command()
+@app.command(no_args_is_help=True)
 def plot(fname: InputPath, cmd_id: ExperimentId = "spatial", verbose: Verbose = False):
     """Plot spatial gene programs."""
     with timed("Loading data", verbose):
