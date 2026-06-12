@@ -122,6 +122,7 @@ class SpatialGeneKPCA(KPCAModel):
         spot_operator="sample",
         alpha=1.0,
         gene_center=True,
+        kernel="wendland_c2",
         eps=1e-12,
         covariates_tol=1e-10,
         dtype=np.float64,
@@ -131,6 +132,7 @@ class SpatialGeneKPCA(KPCAModel):
         self.spot_operator = spot_operator
         self.alpha = alpha
         self.gene_center = gene_center
+        self.kernel = kernel
         self.eps = eps
         self.covariates_tol = covariates_tol
         self.dtype = dtype
@@ -181,6 +183,7 @@ class SpatialGeneContrastKPCA(KPCAModel):
         alpha=1.0,
         gene_center=True,
         normalise_by="left",
+        kernel="wendland_c2",
         eps=1e-12,
         covariates_tol=1e-10,
         dtype=np.float64,
@@ -192,6 +195,7 @@ class SpatialGeneContrastKPCA(KPCAModel):
         self.alpha = alpha
         self.gene_center = gene_center
         self.normalise_by = normalise_by
+        self.kernel = kernel
         self.eps = eps
         self.covariates_tol = covariates_tol
         self.dtype = dtype
@@ -266,6 +270,7 @@ class SpatialGeneSampleCombinedKPCA(KPCAModel):
         normalise_by="sample",
         alpha=1.0,
         gene_center=True,
+        kernel="wendland_c2",
         eps=1e-12,
         covariates_tol=1e-10,
         dtype=np.float64,
@@ -277,6 +282,7 @@ class SpatialGeneSampleCombinedKPCA(KPCAModel):
         self.normalise_by = normalise_by
         self.alpha = alpha
         self.gene_center = gene_center
+        self.kernel = kernel
         self.eps = eps
         self.covariates_tol = covariates_tol
         self.dtype = dtype
@@ -342,6 +348,7 @@ class SpatialGeneSampleContrastKPCA(KPCAModel):
         normalise_by="sample",
         alpha=1.0,
         gene_center=True,
+        kernel="wendland_c2",
         eps=1e-12,
         covariates_tol=1e-10,
         dtype=np.float64,
@@ -355,6 +362,7 @@ class SpatialGeneSampleContrastKPCA(KPCAModel):
         self.normalise_by = normalise_by
         self.alpha = alpha
         self.gene_center = gene_center
+        self.kernel = kernel
         self.eps = eps
         self.covariates_tol = covariates_tol
         self.dtype = dtype

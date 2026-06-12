@@ -4,11 +4,16 @@ import matplotlib.pyplot as plt
 import typer
 from sklearn.neighbors import NearestNeighbors
 
-from tanpopo.data import (
-    preprocess_anndata,
-    preprocess_anndata_shared_genes,
-    get_spatial_from_anndata,
+from tanpopo.io import (
+    load_preprocess_sample,
+    load_preprocess_samples,
+    preprocess_cfg,
+    model_cfg,
+    add_metadata,
+    store_sample_result,
+    store_multi_sample_result,
 )
+from tanpopo.data import get_spatial_from_anndata
 from tanpopo.models import (
     SpatialGeneKPCA,
     SpatialGeneContrastKPCA,
@@ -17,7 +22,7 @@ from tanpopo.models import (
 )
 from tanpopo.clustering import cluster_genes, cluster_spots
 from tanpopo.plot import plot_spatial_modes
-from tanpopo.utils import as_value, timed, argtop, pd_dtype
+from tanpopo.utils import argtop, pd_dtype, timed
 from tanpopo.analysis import print_top_genes_per_basis
 from tanpopo.cli import *
 
@@ -52,33 +57,20 @@ def _parse_labels(adata, labels, key):
     return obs_labels
 
 
-def _name_samples(fnames, sample_names):
-    if sample_names is None:
-        sample_names = [fname.stem for fname in fnames]
-    if len(sample_names) != len(fnames):
-        raise typer.BadParameter(f"Supply exactly one --sample-name for each --input.")
-    if len(sample_names) != len(set(sample_names)):
-        raise typer.BadParameter("Sample names must be unique.")
-    return sample_names
+def _get_spatial_inputs_for_samples(adata_samples, layer, spot_operator, label_key=None):
+    W, coords, covariates_matrix, labels = [], [], [], [] if spot_operator == "label" else None
 
+    for adata in adata_samples:
+        w, pts, cov = get_spatial_from_anndata(adata, layer)
+        W.append(w)
+        coords.append(pts)
+        covariates_matrix.append(cov)
 
-def _concat_adata_samples(adatas, sample_names):
-    if len(adatas) == 1:
-        return adatas[0].copy()
-    return sc.concat(
-        adatas,
-        label="sample",
-        keys=[str(x) for x in sample_names],
-        index_unique="-",
-        join="inner",
-        merge="unique",
-    )
+        if spot_operator == "label":
+            _require_obs_key(adata, label_key, "--label-key")
+            labels.append(adata.obs[label_key])
 
-
-def _full_mode(spot_mode, mask, total_spots):
-    full_mode = np.full((total_spots, spot_mode.shape[1]), np.nan)
-    full_mode[mask] = spot_mode
-    return full_mode
+    return W, coords, covariates_matrix, labels
 
 
 app = typer.Typer(
@@ -111,54 +103,27 @@ def spatial_programs(
     verbose: Verbose = False,
 ):
     """Spatial gene programs in a sample, optionally within labels."""
-    with timed("Loading data", verbose):
-        adata = sc.read_h5ad(fname)
-        preprocess_anndata(
-            adata, target_sum, transform, min_counts, min_spot_fraction, covariates, layer
-        )
-    if verbose:
-        print(adata)
+    pre_args = preprocess_cfg(
+        target_sum, transform, min_counts, min_spot_fraction, covariates, layer
+    )
+    model_args = model_cfg(radius, alpha, gene_center, spot_operator)
 
+    adata = load_preprocess_sample(fname, verbose=verbose, **pre_args)
     if subset_labels is not None or spot_operator == "label":
         _require_obs_key(adata, label_key, "--label-key")
     obs_labels = _parse_labels(adata, subset_labels, label_key)
     labels = adata.obs[label_key] if spot_operator == "label" and subset_labels is None else None
 
-    model = SpatialGeneKPCA(radius, spot_operator, alpha, gene_center, verbose=verbose)
-    adata.uns["tanpopo"] = {
-        cmd_id: {
-            "preprocessing": {
-                "target_sum": target_sum,
-                "transform": as_value(transform),
-                "min_counts": min_counts,
-                "min_spot_fraction": min_spot_fraction,
-            },
-            "cfg": {
-                "kernel": "wendland_c2",
-                "radius": radius,
-                "alpha": alpha,
-                "spot_operator": as_value(spot_operator),
-                "gene_center": gene_center,
-                "covariates": covariates,
-                "label_key": label_key,
-            },
-        }
-    }
+    model = SpatialGeneKPCA(verbose=verbose, **model_args)
+    add_metadata(adata, cmd_id, pre_args, model_args, label_key)
+
     for label in obs_labels:
         mask = (adata.obs[label_key] == label).to_numpy() if subset_labels else slice(None)
         key = f"_{str(label).replace(' ', '_')}" if subset_labels else ""
 
         W, coords, covariates_matrix = get_spatial_from_anndata(adata[mask], layer)
         model.fit(W, coords, n_components, labels, covariates_matrix)
-
-        adata.obsm[f"tanpopo_{cmd_id}{key}_spot_modes"] = _full_mode(
-            model.spot_modes[0], mask, adata.n_obs
-        )
-        adata.varm[f"tanpopo_{cmd_id}{key}_eigenvectors"] = model.eigenvectors
-        adata.varm[f"tanpopo_{cmd_id}{key}_gene_loadings"] = model.gene_loadings
-        adata.varm[f"tanpopo_{cmd_id}{key}_gene_scores"] = model.gene_scores
-        adata.var[f"tanpopo_{cmd_id}{key}_gene_scores"] = model.gene_spatial_scores()
-        adata.uns["tanpopo"][cmd_id][f"eigenvalues{key}"] = model.eigenvalues
+        store_sample_result(adata, model, cmd_id, key, mask)
 
         if verbose:
             if subset_labels:
@@ -202,68 +167,26 @@ def shared_programs(
 ):
     """Shared spatial gene programs across multiple samples."""
     _require_multi_input(fnames, "shared-programs")
-    with timed("Loading data", verbose):
-        adata_samples = [sc.read_h5ad(fname) for fname in fnames]
-        preprocess_anndata_shared_genes(
-            adata_samples, target_sum, transform, min_counts, min_spot_fraction, covariates, layer
-        )
-        sample_names = _name_samples(fnames, sample_names)
-    if verbose:
-        for adata, name in zip(adata_samples, sample_names):
-            print(name)
-            print(adata)
+    pre_args = preprocess_cfg(
+        target_sum, transform, min_counts, min_spot_fraction, covariates, layer
+    )
+    model_args = model_cfg(
+        radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
+    )
+    adata_samples, sample_names = load_preprocess_samples(
+        fnames, sample_names, verbose=verbose, **pre_args
+    )
+    W, coords, covariates_matrix, labels = _get_spatial_inputs_for_samples(
+        adata_samples, layer, spot_operator, label_key
+    )
 
-    W, coords, covariates_matrix, labels = [], [], [], [] if spot_operator == "label" else None
-    for adata in adata_samples:
-        w, pts, cov = get_spatial_from_anndata(adata, layer)
-        W.append(w)
-        coords.append(pts)
-        covariates_matrix.append(cov)
+    model = SpatialGeneSampleCombinedKPCA(verbose=verbose, **model_args).fit(
+        W, coords, n_components, labels, covariates_matrix
+    )
 
-        if spot_operator == "label":
-            _require_obs_key(adata, label_key, "--label-key")
-            labels.append(adata.obs[label_key])
-
-    model = SpatialGeneSampleCombinedKPCA(
-        radius, spot_operator, sample_weighting, normalise_by, alpha, gene_center, verbose=verbose
-    ).fit(W, coords, n_components, labels, covariates_matrix)
-
-    for adata, name, spot_mode, gene_loadings in zip(
-        adata_samples, sample_names, model.spot_modes, model.gene_loadings
-    ):
-        adata.obsm[f"tanpopo_{cmd_id}_spot_modes"] = spot_mode
-        adata.varm[f"tanpopo_{cmd_id}_{name}_gene_loadings"] = gene_loadings
-        if plot:
-            plot_spatial_modes(adata, spot_mode, cmap="coolwarm", vcenter=0)
-
-    adata_samples = _concat_adata_samples(adata_samples, sample_names)
-    adata_samples.varm[f"tanpopo_{cmd_id}_eigenvectors"] = model.eigenvectors
-    adata_samples.varm[f"tanpopo_{cmd_id}_gene_scores"] = model.gene_scores
-    adata_samples.var[f"tanpopo_{cmd_id}_gene_scores"] = model.gene_spatial_scores()
-    adata_samples.uns["tanpopo"] = {
-        cmd_id: {
-            "eigenvalues": model.eigenvalues,
-            "sample_names": sample_names,
-            "sample_coefficients": model.sample_coefficients_,
-            "preprocessing": {
-                "target_sum": target_sum,
-                "transform": as_value(transform),
-                "min_counts": min_counts,
-                "min_spot_fraction": min_spot_fraction,
-            },
-            "cfg": {
-                "kernel": "wendland_c2",
-                "radius": radius,
-                "alpha": alpha,
-                "spot_operator": as_value(spot_operator),
-                "sample_weighting": as_value(sample_weighting),
-                "normalise_by": as_value(normalise_by),
-                "gene_center": gene_center,
-                "covariates": covariates,
-                "label_key": label_key,
-            },
-        }
-    }
+    adata_samples = store_multi_sample_result(adata_samples, sample_names, model, cmd_id, plot)
+    extra = {"sample_names": sample_names, "sample_coefficients": model.sample_coefficients_}
+    add_metadata(adata_samples, cmd_id, pre_args, model_args, label_key, extra)
 
     if verbose:
         print_top_genes_per_basis(model.eigenvectors, model.eigenvalues, adata_samples.var_names)
@@ -297,50 +220,21 @@ def differential_label_programs(
     verbose: Verbose = False,
 ):
     """Differential gene programs enriched in one label versus the rest."""
-    with timed("Loading data", verbose):
-        adata = sc.read_h5ad(fname)
-        preprocess_anndata(
-            adata, target_sum, transform, min_counts, min_spot_fraction, covariates, layer
-        )
-    if verbose:
-        print(adata)
-
+    pre_args = preprocess_cfg(
+        target_sum, transform, min_counts, min_spot_fraction, covariates, layer
+    )
+    model_args = model_cfg(
+        radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
+    )
+    adata = load_preprocess_sample(fname, verbose=verbose, **pre_args)
     _require_obs_key(adata, label_key, "--label-key")
     obs_labels = adata.obs[label_key].unique()
     W, coords, covariates_matrix = get_spatial_from_anndata(adata, layer)
 
     model = SpatialGeneSampleContrastKPCA(
-        radius=radius,
-        positive_samples=[0],
-        negative_samples=[1],
-        spot_operator=spot_operator,
-        sample_weighting=sample_weighting,
-        normalise_by=normalise_by,
-        alpha=alpha,
-        gene_center=gene_center,
-        verbose=verbose,
+        positive_samples=[0], negative_samples=[1], verbose=verbose, **model_args
     )
-    adata.uns["tanpopo"] = {
-        cmd_id: {
-            "preprocessing": {
-                "target_sum": target_sum,
-                "transform": as_value(transform),
-                "min_counts": min_counts,
-                "min_spot_fraction": min_spot_fraction,
-            },
-            "cfg": {
-                "kernel": "wendland_c2",
-                "radius": radius,
-                "alpha": alpha,
-                "spot_operator": as_value(spot_operator),
-                "sample_weighting": as_value(sample_weighting),
-                "normalise_by": as_value(normalise_by),
-                "gene_center": gene_center,
-                "covariates": covariates,
-                "label_key": label_key,
-            },
-        }
-    }
+    add_metadata(adata, cmd_id, pre_args, model_args, label_key)
 
     for label in obs_labels:
         mask = (adata.obs[label_key] == label).to_numpy()
@@ -358,15 +252,7 @@ def differential_label_programs(
             covariates_list = None
 
         model.fit(W_list, coords_list, n_components, label_list, covariates_list)
-
-        adata.obsm[f"tanpopo_{cmd_id}{key}_spot_modes"] = _full_mode(
-            model.spot_modes[0], mask, adata.n_obs
-        )
-        adata.varm[f"tanpopo_{cmd_id}{key}_eigenvectors"] = model.eigenvectors
-        adata.varm[f"tanpopo_{cmd_id}{key}_gene_loadings"] = model.gene_loadings[0]
-        adata.varm[f"tanpopo_{cmd_id}{key}_gene_scores"] = model.gene_scores
-        adata.var[f"tanpopo_{cmd_id}{key}_gene_scores"] = model.gene_spatial_scores()
-        adata.uns["tanpopo"][cmd_id][f"eigenvalues{key}"] = model.eigenvalues
+        store_sample_result(adata, model, cmd_id, key, mask, model.gene_loadings[0])
 
         if verbose:
             print(f"\n{label_key}: {label}")
@@ -412,77 +298,31 @@ def differential_sample_programs(
     fnames = fnames_a + fnames_b
     n_a, n_b = len(fnames_a), len(fnames_b)
     idx_a, idx_b = range(n_a), range(n_a, n_a + n_b)
-    with timed("Loading data", verbose):
-        adata_samples = [sc.read_h5ad(fname) for fname in fnames]
-        preprocess_anndata_shared_genes(
-            adata_samples, target_sum, transform, min_counts, min_spot_fraction, covariates, layer
-        )
-        sample_names = _name_samples(fnames, sample_names)
-    if verbose:
-        for adata, name in zip(adata_samples, sample_names):
-            print(name)
-            print(adata)
-
-    W, coords, covariates_matrix, labels = [], [], [], [] if spot_operator == "label" else None
-    for adata in adata_samples:
-        w, pts, cov = get_spatial_from_anndata(adata, layer)
-        W.append(w)
-        coords.append(pts)
-        covariates_matrix.append(cov)
-
-        if spot_operator == "label":
-            _require_obs_key(adata, label_key, "--label-key")
-            labels.append(adata.obs[label_key])
+    pre_args = preprocess_cfg(
+        target_sum, transform, min_counts, min_spot_fraction, covariates, layer
+    )
+    model_args = model_cfg(
+        radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
+    )
+    adata_samples, sample_names = load_preprocess_samples(
+        fnames, sample_names, verbose=verbose, **pre_args
+    )
+    W, coords, covariates_matrix, labels = _get_spatial_inputs_for_samples(
+        adata_samples, layer, spot_operator, label_key
+    )
 
     model = SpatialGeneSampleContrastKPCA(
-        radius=radius,
-        positive_samples=idx_a,
-        negative_samples=idx_b,
-        spot_operator=spot_operator,
-        sample_weighting=sample_weighting,
-        normalise_by=normalise_by,
-        alpha=alpha,
-        gene_center=gene_center,
-        verbose=verbose,
+        positive_samples=idx_a, negative_samples=idx_b, verbose=verbose, **model_args
     ).fit(W, coords, n_components, labels, covariates_matrix)
 
-    for adata, name, spot_mode, gene_loadings in zip(
-        adata_samples, sample_names, model.spot_modes, model.gene_loadings
-    ):
-        adata.obsm[f"tanpopo_{cmd_id}_spot_modes"] = spot_mode
-        adata.varm[f"tanpopo_{cmd_id}_{name}_gene_loadings"] = gene_loadings
-        if plot:
-            plot_spatial_modes(adata, spot_mode, cmap="coolwarm", vcenter=0)
-
-    adata_samples = _concat_adata_samples(adata_samples, sample_names)
-    adata_samples.varm[f"tanpopo_{cmd_id}_eigenvectors"] = model.eigenvectors
-    adata_samples.varm[f"tanpopo_{cmd_id}_gene_scores"] = model.gene_scores
-    adata_samples.var[f"tanpopo_{cmd_id}_gene_scores"] = model.gene_spatial_scores()
-    adata_samples.uns[f"tanpopo"] = {
-        cmd_id: {
-            "eigenvalues": model.eigenvalues,
-            "sample_names_group_A": [sample_names[i] for i in idx_a],
-            "sample_names_group_B": [sample_names[i] for i in idx_b],
-            "sample_coefficients": model.sample_coefficients_,
-            "preprocessing": {
-                "target_sum": target_sum,
-                "transform": as_value(transform),
-                "min_counts": min_counts,
-                "min_spot_fraction": min_spot_fraction,
-            },
-            "cfg": {
-                "kernel": "wendland_c2",
-                "radius": radius,
-                "alpha": alpha,
-                "spot_operator": as_value(spot_operator),
-                "sample_weighting": as_value(sample_weighting),
-                "normalise_by": as_value(normalise_by),
-                "gene_center": gene_center,
-                "covariates": covariates,
-                "label_key": label_key,
-            },
-        }
+    adata_samples = store_multi_sample_result(adata_samples, sample_names, model, cmd_id, plot)
+    extra = {
+        "eigenvalues": model.eigenvalues,
+        "sample_names_group_A": [sample_names[i] for i in idx_a],
+        "sample_names_group_B": [sample_names[i] for i in idx_b],
+        "sample_coefficients": model.sample_coefficients_,
     }
+    add_metadata(adata_samples, cmd_id, pre_args, model_args, label_key, extra)
 
     if verbose:
         print_top_genes_per_basis(model.eigenvectors, model.eigenvalues, adata_samples.var_names)
@@ -513,49 +353,20 @@ def marker_programs(
     verbose: Verbose = False,
 ):
     """Marker gene programs that distinguish labelled domains or cell types."""
-    with timed("Loading data", verbose):
-        adata = sc.read_h5ad(fname)
-        preprocess_anndata(
-            adata, target_sum, transform, min_counts, min_spot_fraction, covariates, layer
-        )
-    if verbose:
-        print(adata)
-
+    pre_args = preprocess_cfg(
+        target_sum, transform, min_counts, min_spot_fraction, covariates, layer
+    )
+    model_args = model_cfg(radius, alpha, gene_center)
+    adata = load_preprocess_sample(fname, verbose=verbose, **pre_args)
     _require_obs_key(adata, label_key, "--label-key")
     W, coords, covariates_matrix = get_spatial_from_anndata(adata, layer)
     labels = adata.obs[label_key]
 
-    model = SpatialGeneContrastKPCA.between_labels(
-        radius=radius,
-        alpha=alpha,
-        gene_center=gene_center,
-        verbose=verbose,
-    ).fit(W, coords, n_components, labels, covariates_matrix)
-
-    adata.obsm[f"tanpopo_{cmd_id}_spot_modes"] = model.spot_modes[0]
-    adata.varm[f"tanpopo_{cmd_id}_gene_loadings"] = model.gene_loadings
-    adata.varm[f"tanpopo_{cmd_id}_eigenvectors"] = model.eigenvectors
-    adata.varm[f"tanpopo_{cmd_id}_gene_scores"] = model.gene_scores
-    adata.var[f"tanpopo_{cmd_id}_gene_scores"] = model.gene_spatial_scores()
-    adata.uns["tanpopo"] = {
-        cmd_id: {
-            "eigenvalues": model.eigenvalues,
-            "preprocessing": {
-                "target_sum": target_sum,
-                "transform": as_value(transform),
-                "min_counts": min_counts,
-                "min_spot_fraction": min_spot_fraction,
-            },
-            "cfg": {
-                "kernel": "wendland_c2",
-                "radius": radius,
-                "alpha": alpha,
-                "gene_center": gene_center,
-                "covariates": covariates,
-                "label_key": label_key,
-            },
-        }
-    }
+    model = SpatialGeneContrastKPCA.between_labels(verbose=verbose, **model_args).fit(
+        W, coords, n_components, labels, covariates_matrix
+    )
+    add_metadata(adata, cmd_id, pre_args, model_args, label_key)
+    store_sample_result(adata, model, cmd_id)
 
     if verbose:
         print_top_genes_per_basis(model.eigenvectors, model.eigenvalues, adata.var_names)
@@ -643,6 +454,9 @@ def h5ad_summary(fname: InputPath):
         if "tanpopo" in adata.uns:
             experiment_ids = ", ".join(f"'{key}'" for key in adata.uns["tanpopo"].keys())
             print("    uns['tanpopo']: " + experiment_ids)
+
+            for key, val in adata.uns["tanpopo"].items():
+                print(f"    uns['tanpopo']['{key}']: ", val)
 
 
 @app.command()
