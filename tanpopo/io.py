@@ -167,7 +167,7 @@ def store_multi_sample_result(adata_samples, sample_names, model, cmd_id, plot=F
         adata.varm[f"tanpopo_{cmd_id}_{name}_gene_loadings"] = gene_loadings
 
         if plot:
-            plot_spatial_modes(adata, spot_mode, cmap="coolwarm", vcenter=0)
+            plot_spatial_modes(adata, spot_mode)
 
     combined = concat_adata_samples(adata_samples, sample_names)
     combined.uns.setdefault("tanpopo", {}).setdefault(cmd_id, {})

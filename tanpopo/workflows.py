@@ -133,9 +133,7 @@ def spatial_programs(
             print_top_genes_per_basis(model.eigenvectors, model.eigenvalues, adata.var_names)
         if plot:
             size = 120000 / adata.n_obs
-            plot_spatial_modes(
-                adata[mask], model.spot_modes[0], cmap="coolwarm", vcenter=0, size=size
-            )
+            plot_spatial_modes(adata[mask], model.spot_modes[0], size=size)
 
     if output:
         adata.write(output)
@@ -268,9 +266,7 @@ def differential_label_programs(
             print_top_genes_per_basis(model.eigenvectors, model.eigenvalues, adata.var_names)
         if plot:
             size = 120000 / adata.n_obs
-            plot_spatial_modes(
-                adata[mask], model.spot_modes[0], cmap="coolwarm", vcenter=0, size=size
-            )
+            plot_spatial_modes(adata[mask], model.spot_modes[0], size=size)
 
     if output:
         adata.write(output)
@@ -388,7 +384,7 @@ def marker_programs(
     if output:
         adata.write(output)
     if plot:
-        plot_spatial_modes(adata, model.spot_modes[0], cmap="coolwarm", vcenter=0)
+        plot_spatial_modes(adata, model.spot_modes[0])
         plt.show()
     return adata
 
@@ -471,7 +467,6 @@ def h5ad_summary(fname: InputPath):
         if "tanpopo" in adata.uns:
             experiment_ids = ", ".join(f"'{key}'" for key in adata.uns["tanpopo"].keys())
             print("    uns['tanpopo']: " + experiment_ids)
-
             # for key, val in adata.uns["tanpopo"].items():
             #     print(f"    uns['tanpopo']['{key}']: ", val)
 
@@ -530,9 +525,7 @@ def plot(fname: InputPath, cmd_id: ExperimentId = "spatial", verbose: Verbose = 
             adata.varm[f"tanpopo_{cmd_id}_gene_loadings"],
             adata.var_names,
         )
-    plot_spatial_modes(
-        adata, adata.obsm[f"tanpopo_{cmd_id}_spot_modes"], cmap="coolwarm", vcenter=0
-    )
+    plot_spatial_modes(adata, adata.obsm[f"tanpopo_{cmd_id}_spot_modes"])
     plt.show()
 
 

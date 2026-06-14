@@ -37,17 +37,22 @@ def spatial_scatter(adata, keys, **kwargs):
         ax.axis("off")
 
 
-def plot_spatial_modes(adata, phi, prefix="spatial_mode", **kwargs):
+def plot_spatial_modes(adata, phi, clip=(1, 99), cmap="coolwarm", vcenter=0, **kwargs):
     """Plot spatial gene eigenmodes"""
+    prefix = "spatial_mode"
+    n_modes = phi.shape[1]
     empty_adata = ad.AnnData(X=np.empty(adata.shape), obs=adata.obs.copy(), var=adata.var.copy())
     empty_adata.obsm["spatial"] = adata.obsm["spatial"]
 
-    keys = []
-    for k in range(phi.shape[1]):
+    keys, vmin, vmax = [], [], []
+    for k in range(n_modes):
         keys.append(f"{prefix}_{k}")
         empty_adata.obs[keys[k]] = phi[:, k]
+        a, b = np.percentile(phi[:, k], clip)
+        vmin.append(min(a, -1e-12))
+        vmax.append(max(b, 1e-12))
 
-    spatial_scatter(empty_adata, keys, **kwargs)
+    spatial_scatter(empty_adata, keys, vmin=vmin, vmax=vmax, cmap=cmap, vcenter=vcenter, **kwargs)
 
 
 def plot_gene_clusters(adata, key="leiden", **kwargs):
