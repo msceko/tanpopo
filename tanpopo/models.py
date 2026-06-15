@@ -135,7 +135,7 @@ class SpatialGeneKPCA(KPCAModel):
         self.kernel = kernel
         self.eps = eps
         self.covariates_tol = covariates_tol
-        self.dtype = dtype
+        self.dtype = np.dtype(dtype)
         self.verbose = verbose
 
     def _build_operator(self, samples):
@@ -198,7 +198,7 @@ class SpatialGeneContrastKPCA(KPCAModel):
         self.kernel = kernel
         self.eps = eps
         self.covariates_tol = covariates_tol
-        self.dtype = dtype
+        self.dtype = np.dtype(dtype)
         self.verbose = verbose
 
     @classmethod
@@ -285,7 +285,7 @@ class SpatialGeneSampleCombinedKPCA(KPCAModel):
         self.kernel = kernel
         self.eps = eps
         self.covariates_tol = covariates_tol
-        self.dtype = dtype
+        self.dtype = np.dtype(dtype)
         self.verbose = verbose
 
     def _build_operator(self, samples):
@@ -365,7 +365,7 @@ class SpatialGeneSampleContrastKPCA(KPCAModel):
         self.kernel = kernel
         self.eps = eps
         self.covariates_tol = covariates_tol
-        self.dtype = dtype
+        self.dtype = np.dtype(dtype)
         self.verbose = verbose
 
     @classmethod

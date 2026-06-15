@@ -99,6 +99,7 @@ def model_cfg(
     radius,
     alpha,
     gene_center,
+    dtype,
     spot_operator=None,
     sample_weighting=None,
     normalise_by=None,
@@ -108,6 +109,7 @@ def model_cfg(
         "radius": radius,
         "alpha": alpha,
         "gene_center": gene_center,
+        "dtype": as_value(dtype),
     }
     if spot_operator is not None:
         cfg["spot_operator"] = as_value(spot_operator)

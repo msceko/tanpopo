@@ -139,6 +139,11 @@ class SampleNormaliseTypes(str, Enum):
     pooled = "pooled"
 
 
+class Dtypes(str, Enum):
+    float32 = "float32"
+    float64 = "float64"
+
+
 Components = Annotated[
     int,
     typer.Option("--components", "-k", help="Number of spatial components."),
@@ -168,6 +173,14 @@ SampleNormaliseBy = Annotated[
     typer.Option(
         "--normalise-by",
         help="Gene scaling reference for sample-wise models.",
+    ),
+]
+Dtype = Annotated[
+    Dtypes,
+    typer.Option(
+        "--dtype",
+        help="Data type used for internal calculation. "
+        "Use `float32` to lower memory cost with potentially reduced numerical accuracy.",
     ),
 ]
 

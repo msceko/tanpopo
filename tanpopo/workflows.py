@@ -100,6 +100,7 @@ def spatial_programs(
     alpha: Alpha = 1.0,
     spot_operator: SpotOperator = SpotOperatorTypes.sample,
     gene_center: GeneCenter = False,
+    dtype: Dtype = Dtypes.float64,
     plot: Plot = False,
     verbose: Verbose = False,
 ):
@@ -108,7 +109,7 @@ def spatial_programs(
     pre_args = preprocess_cfg(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
-    model_args = model_cfg(radius, alpha, gene_center, spot_operator)
+    model_args = model_cfg(radius, alpha, gene_center, dtype, spot_operator)
 
     adata = load_preprocess_sample(fname, exclude=exclude_labels, verbose=verbose, **pre_args)
     if subset_labels is not None or spot_operator == "label":
@@ -163,6 +164,7 @@ def shared_programs(
     sample_weighting: SampleWeighting = SampleWeightingTypes.trace,
     normalise_by: SampleNormaliseBy = SampleNormaliseTypes.sample,
     gene_center: GeneCenter = False,
+    dtype: Dtype = Dtypes.float64,
     plot: Plot = False,
     verbose: Verbose = False,
 ):
@@ -173,7 +175,7 @@ def shared_programs(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
     model_args = model_cfg(
-        radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
+        radius, alpha, gene_center, dtype, spot_operator, sample_weighting, normalise_by
     )
 
     adata_samples, sample_names = load_preprocess_samples(
@@ -221,6 +223,7 @@ def differential_label_programs(
     sample_weighting: SampleWeighting = SampleWeightingTypes.trace,
     normalise_by: SampleNormaliseBy = SampleNormaliseTypes.sample,
     gene_center: GeneCenter = False,
+    dtype: Dtype = Dtypes.float64,
     plot: Plot = False,
     verbose: Verbose = False,
 ):
@@ -230,7 +233,7 @@ def differential_label_programs(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
     model_args = model_cfg(
-        radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
+        radius, alpha, gene_center, dtype, spot_operator, sample_weighting, normalise_by
     )
 
     adata = load_preprocess_sample(fname, exclude=exclude_labels, verbose=verbose, **pre_args)
@@ -297,6 +300,7 @@ def differential_sample_programs(
     sample_weighting: SampleWeighting = SampleWeightingTypes.trace,
     normalise_by: SampleNormaliseBy = SampleNormaliseTypes.sample,
     gene_center: GeneCenter = False,
+    dtype: Dtype = Dtypes.float64,
     plot: Plot = False,
     verbose: Verbose = False,
 ):
@@ -309,7 +313,7 @@ def differential_sample_programs(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
     model_args = model_cfg(
-        radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
+        radius, alpha, gene_center, dtype, spot_operator, sample_weighting, normalise_by
     )
 
     adata_samples, sample_names = load_preprocess_samples(
@@ -358,6 +362,7 @@ def marker_programs(
     covariates: Covariates = None,
     alpha: Alpha = 1.0,
     gene_center: GeneCenter = False,
+    dtype: Dtype = Dtypes.float64,
     plot: Plot = False,
     verbose: Verbose = False,
 ):
@@ -366,7 +371,7 @@ def marker_programs(
     pre_args = preprocess_cfg(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
-    model_args = model_cfg(radius, alpha, gene_center)
+    model_args = model_cfg(radius, alpha, gene_center, dtype)
 
     adata = load_preprocess_sample(fname, exclude=exclude_labels, verbose=verbose, **pre_args)
     _require_obs_key(adata, label_key, "--label-key")
@@ -408,6 +413,7 @@ def gene_scores(
     alpha: Alpha = 1.0,
     spot_operator: SpotOperator = SpotOperatorTypes.sample,
     gene_center: GeneCenter = False,
+    dtype: Dtype = Dtypes.float64,
     verbose: Verbose = False,
 ):
     """Score genes by spatial structure."""
@@ -429,6 +435,7 @@ def gene_scores(
         alpha,
         spot_operator,
         gene_center,
+        dtype,
     )
     obs_labels = _parse_labels(adata, subset_labels, label_key)
     order = np.argsort(adata.var[f"tanpopo_{cmd_id}_gene_scores"])[::-1]
