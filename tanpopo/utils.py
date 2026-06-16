@@ -109,6 +109,11 @@ def argtop(v, n_top, mode):
     return idx[:n_top]
 
 
+def center_rows(X):
+    """Center columns by row mean"""
+    return X - X.mean(axis=0, keepdims=True)
+
+
 def get_counts_matrix(adata, sparse=True, layer=None):
     """
     Return the counts matrix from adata or adata.layers[layer].

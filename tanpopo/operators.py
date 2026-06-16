@@ -6,12 +6,12 @@ from scipy.sparse.linalg import LinearOperator
 
 from tanpopo.data import Groups
 from tanpopo.projection import SpotProjector
+from tanpopo.utils import center_rows
 
 
 class ProjectedKernel:
     """
     Efficient projected spatial kernel: S = P K P
-
     where P is a SpotProjector (centering + optional covariate removal).
     The diagonal computation is handled separately by gene_spatial_variance.
     """
@@ -28,8 +28,8 @@ class ProjectedKernel:
         X = self.projector.adjoint(X, residualise=residualise)
         return X
 
-    def gene_spatial_variance(self, W):
-        return gene_spatial_variance(W, self.K, self.projector, dtype=self.dtype)
+    def gene_spatial_variance(self, W, block_size=None):
+        return gene_spatial_variance(W, self.K, self.projector, block_size, dtype=self.dtype)
 
 
 @dataclass
@@ -46,9 +46,7 @@ class SpotOperatorSpec:
     centering: str
 
     def build(self, K, sample_groups, label_groups, covariates, tol, dtype):
-        groups = groups_for_operator(
-            self.centering, K.shape[0], sample_groups, label_groups
-        )
+        groups = groups_for_operator(self.centering, K.shape[0], sample_groups, label_groups)
         projector = SpotProjector(
             K.shape[0],
             groups=groups,
@@ -162,6 +160,7 @@ class SampleOperatorBuilder:
         gene_center,
         eps,
         covariates_tol,
+        block_size,
         dtype,
     ):
         self.spot_operator = spot_operator
@@ -171,6 +170,7 @@ class SampleOperatorBuilder:
         self.gene_center = gene_center
         self.eps = eps
         self.covariates_tol = covariates_tol
+        self.block_size = block_size
         self.dtype = dtype
 
     def build(self, samples, signed_coefficients=None):
@@ -193,16 +193,14 @@ class SampleOperatorBuilder:
                 tol=self.covariates_tol,
                 dtype=self.dtype,
             )
-            diag = np.maximum(S.gene_spatial_variance(s.W), self.eps)
+            diag = np.maximum(S.gene_spatial_variance(s.W, self.block_size), self.eps)
             raw_S_ops.append(S)
             raw_diags.append(diag)
 
         raw_diags = np.vstack(raw_diags)
 
         weights = self._sample_weights(samples, raw_diags)
-        coeff = (
-            weights if signed_coefficients is None else weights * signed_coefficients
-        )
+        coeff = weights if signed_coefficients is None else weights * signed_coefficients
 
         if self.normalise_by == "pooled":
             ref = np.sum(np.abs(coeff)[:, None] * raw_diags, axis=0)
@@ -234,9 +232,17 @@ class SampleOperatorBuilder:
         raise ValueError("sample_weighting must be 'none', 'n_spots', or 'trace'")
 
 
-def center_rows(X):
-    """Center columns by row mean"""
-    return X - X.mean(axis=0, keepdims=True)
+@dataclass
+class GeneCenteringState:
+    """Gene-independent state reused by the blocked diagonal calculation."""
+
+    kind: str
+    n: int
+    K1: object = None
+    s11: float = None
+    Z: object = None
+    A: object = None
+    inv_lengths: object = None
 
 
 def groups_for_operator(operator, n, sample_groups=None, label_groups=None):
@@ -303,7 +309,114 @@ def _diag_gene_centered(W, K, projector, dtype=np.float64):
     return WTKW - 2.0 * MTC + MTAM
 
 
-def gene_spatial_variance(W, K, projector, dtype=np.float64):
+def _prepare_gene_centering_state(K, projector, dtype):
+    """Precompute centering quantities that do not depend on the gene slice."""
+    groups = projector.groups
+    n = K.shape[0]
+    if groups is None:
+        return GeneCenteringState(kind="none", n=n)
+
+    offsets = groups.offsets
+    lengths = groups.lengths
+    if len(offsets) == 1:
+        ones = np.ones(n, dtype=dtype)
+        K1 = K @ ones
+        return GeneCenteringState(kind="single", n=n, K1=K1, s11=float(ones @ K1))
+
+    row_to_group = np.empty(n, dtype=np.int64)
+    for group, (offset, length) in enumerate(zip(offsets, lengths)):
+        row_to_group[int(offset) : int(offset + length)] = group
+
+    rows = np.arange(n, dtype=np.int64)
+    Z = sp.csr_matrix(
+        (np.ones(n, dtype=dtype), (rows, row_to_group)), shape=(n, len(offsets)), dtype=dtype
+    )
+    A = (Z.T @ K @ Z).tocsr()
+    return GeneCenteringState(
+        kind="grouped", n=n, Z=Z, A=A, inv_lengths=1.0 / lengths.astype(dtype)
+    )
+
+
+def _diag_gene_centered_block(W, K, state, dtype):
+    """Blocked counterpart of _diag_gene_centered using reusable state."""
+    KW = K @ W
+    WTKW = np.asarray(W.multiply(KW).sum(axis=0)).ravel().astype(dtype, copy=False)
+
+    if state.kind == "none":
+        return WTKW
+
+    if state.kind == "single":
+        colsum = np.asarray(W.sum(axis=0)).ravel().astype(dtype, copy=False)
+        mean = colsum / float(state.n)
+        wTK1 = np.asarray(W.T @ state.K1).ravel().astype(dtype, copy=False)
+        return WTKW - 2.0 * mean * wTK1 + (mean**2) * state.s11
+
+    B = (state.Z.T @ W).tocsr()
+    C = (state.Z.T @ KW).tocsr()
+    M = B.multiply(state.inv_lengths[:, None])
+    MTC = np.asarray(M.multiply(C).sum(axis=0)).ravel().astype(dtype, copy=False)
+    AM = state.A @ M
+    MTAM = np.asarray(M.multiply(AM).sum(axis=0)).ravel().astype(dtype, copy=False)
+    return WTKW - 2.0 * MTC + MTAM
+
+
+def _gene_spatial_variance_full(W, K, projector, dtype=np.float64):
+    """Original whole-gene implementation, kept as the no-block fast path."""
+
+    # diag(W^T C K C W), computed by the existing efficient grouped formula.
+    diag0 = _diag_gene_centered(W, K, projector, dtype)
+
+    Q = projector.Q
+    if Q is None:
+        return np.asarray(diag0, dtype=dtype)
+
+    # T = Q^T C W.
+    # Since Q is centered, C Q = Q, so Q^T C W = Q^T W.
+    T = (W.T @ Q).T  # shape: (r, n_genes)
+
+    # S_cov = Q^T K C W = (C K Q)^T W.
+    KQ = K @ Q  # shape: (n_spots, r)
+    CKQ = projector._center(KQ)  # C K Q
+    S_cov = (W.T @ CKQ).T  # shape: (r, n_genes)
+
+    # M = Q^T K Q.
+    M = Q.T @ KQ  # shape: (r, r)
+
+    diag = diag0 - 2.0 * np.sum(T * S_cov, axis=0) + np.sum(T * (M @ T), axis=0)
+    return np.asarray(diag, dtype=dtype)
+
+
+def _gene_spatial_variance_blocked(W, K, projector, block_size, dtype=np.float64):
+    """Compute the diagonal in contiguous gene blocks."""
+    state = _prepare_gene_centering_state(K, projector, dtype)
+
+    Q = projector.Q
+    if Q is None:
+        CKQ = None
+        M = None
+    else:
+        KQ = K @ Q
+        CKQ = projector._center(KQ)
+        M = Q.T @ KQ
+
+    n_genes = W.shape[1]
+    diag = np.empty(n_genes, dtype=dtype)
+    for start in range(0, n_genes, block_size):
+        stop = min(start + block_size, n_genes)
+        W_block = W[:, start:stop]
+        block_diag = _diag_gene_centered_block(W_block, K, state, dtype)
+
+        if Q is not None:
+            T = (W_block.T @ Q).T
+            S_cov = (W_block.T @ CKQ).T
+            block_diag = block_diag - 2.0 * np.sum(T * S_cov, axis=0) + np.sum(T * (M @ T), axis=0)
+
+        diag[start:stop] = block_diag
+
+    return diag
+
+
+def gene_spatial_variance(W, K, projector, block_size=None, dtype=np.float64):
     """
     Compute diag(W^T C R K R C W) without densifying W.
 
@@ -328,31 +441,18 @@ def gene_spatial_variance(W, K, projector, dtype=np.float64):
 
     Because C Q = Q, this is equivalent to the dense formula using W_c = C W,
     but avoids materialising W_c.
+
+    block_size controls the maximum number of genes represented by KW and
+    the covariate correction temporaries at once. None, or a value greater than
+    or equal to the number of genes, uses the original whole-matrix fast path.
     """
     W = W.tocsc() if sp.issparse(W) else sp.csc_matrix(W, dtype=dtype)
-    K = K.tocsr().astype(dtype)
-
-    # diag(W^T C K C W), computed by the existing efficient grouped formula.
-    diag0 = _diag_gene_centered(W, K, projector, dtype)
-
-    Q = projector.Q
-    if Q is None:
-        return np.asarray(diag0, dtype=dtype)
-
-    # T = Q^T C W.
-    # Since Q is centered, C Q = Q, so Q^T C W = Q^T W.
-    T = (W.T @ Q).T  # shape: (r, n_genes)
-
-    # S_cov = Q^T K C W = (C K Q)^T W.
-    KQ = K @ Q  # shape: (n_spots, r)
-    CKQ = projector._center(KQ)  # C K Q
-    S_cov = (W.T @ CKQ).T  # shape: (r, n_genes)
-
-    # M = Q^T K Q.
-    M = Q.T @ KQ  # shape: (r, r)
-
-    diag = diag0 - 2.0 * np.sum(T * S_cov, axis=0) + np.sum(T * (M @ T), axis=0)
-    return np.asarray(diag, dtype=dtype)
+    K = K.tocsr().astype(dtype, copy=False)
+    if block_size is None:
+        return _gene_spatial_variance_full(W, K, projector, dtype)
+    if block_size < 0 or not isinstance(block_size, (int, np.integer)):
+        raise TypeError("Gene block_size must be a positive integer.")
+    return _gene_spatial_variance_blocked(W, K, projector, block_size, dtype)
 
 
 def gene_scale_from_diag(diag, alpha, eps):

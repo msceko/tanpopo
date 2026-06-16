@@ -100,6 +100,7 @@ def spatial_programs(
     alpha: Alpha = 1.0,
     spot_operator: SpotOperator = SpotOperatorTypes.sample,
     gene_center: GeneCenter = False,
+    block_size: BlockSize = None,
     dtype: Dtype = Dtypes.float64,
     plot: Plot = False,
     verbose: Verbose = False,
@@ -109,7 +110,7 @@ def spatial_programs(
     pre_args = preprocess_cfg(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
-    model_args = model_cfg(radius, alpha, gene_center, dtype, spot_operator)
+    model_args = model_cfg(radius, alpha, gene_center, spot_operator)
 
     adata = load_preprocess_sample(fname, exclude=exclude_labels, verbose=verbose, **pre_args)
     if subset_labels is not None or spot_operator == "label":
@@ -117,7 +118,7 @@ def spatial_programs(
     obs_labels = _parse_labels(adata, subset_labels, label_key)
     labels = adata.obs[label_key] if spot_operator == "label" and subset_labels is None else None
 
-    model = SpatialGeneKPCA(verbose=verbose, **model_args)
+    model = SpatialGeneKPCA(block_size=block_size, dtype=dtype, verbose=verbose, **model_args)
     add_metadata(adata, cmd_id, pre_args, model_args)
 
     for label in obs_labels:
@@ -164,6 +165,7 @@ def shared_programs(
     sample_weighting: SampleWeighting = SampleWeightingTypes.trace,
     normalise_by: SampleNormaliseBy = SampleNormaliseTypes.sample,
     gene_center: GeneCenter = False,
+    block_size: BlockSize = None,
     dtype: Dtype = Dtypes.float64,
     plot: Plot = False,
     verbose: Verbose = False,
@@ -175,7 +177,7 @@ def shared_programs(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
     model_args = model_cfg(
-        radius, alpha, gene_center, dtype, spot_operator, sample_weighting, normalise_by
+        radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
     )
 
     adata_samples, sample_names = load_preprocess_samples(
@@ -187,9 +189,9 @@ def shared_programs(
         adata_samples, layer, spot_operator, label_key
     )
 
-    model = SpatialGeneSampleCombinedKPCA(verbose=verbose, **model_args).fit(
-        W, coords, n_components, labels, covariates_matrix
-    )
+    model = SpatialGeneSampleCombinedKPCA(
+        block_size=block_size, dtype=dtype, verbose=verbose, **model_args
+    ).fit(W, coords, n_components, labels, covariates_matrix)
     adata_samples = store_multi_sample_result(adata_samples, sample_names, model, cmd_id, plot)
     extra = {"sample_names": sample_names, "sample_coefficients": model.sample_coefficients_}
     add_metadata(adata_samples, cmd_id, pre_args, model_args, extra)
@@ -223,6 +225,7 @@ def differential_label_programs(
     sample_weighting: SampleWeighting = SampleWeightingTypes.trace,
     normalise_by: SampleNormaliseBy = SampleNormaliseTypes.sample,
     gene_center: GeneCenter = False,
+    block_size: BlockSize = None,
     dtype: Dtype = Dtypes.float64,
     plot: Plot = False,
     verbose: Verbose = False,
@@ -233,7 +236,7 @@ def differential_label_programs(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
     model_args = model_cfg(
-        radius, alpha, gene_center, dtype, spot_operator, sample_weighting, normalise_by
+        radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
     )
 
     adata = load_preprocess_sample(fname, exclude=exclude_labels, verbose=verbose, **pre_args)
@@ -242,7 +245,12 @@ def differential_label_programs(
     W, coords, covariates_matrix = get_spatial_from_anndata(adata, layer)
 
     model = SpatialGeneSampleContrastKPCA(
-        positive_samples=[0], negative_samples=[1], verbose=verbose, **model_args
+        positive_samples=[0],
+        negative_samples=[1],
+        block_size=block_size,
+        dtype=dtype,
+        verbose=verbose,
+        **model_args,
     )
     add_metadata(adata, cmd_id, pre_args, model_args)
 
@@ -300,6 +308,7 @@ def differential_sample_programs(
     sample_weighting: SampleWeighting = SampleWeightingTypes.trace,
     normalise_by: SampleNormaliseBy = SampleNormaliseTypes.sample,
     gene_center: GeneCenter = False,
+    block_size: BlockSize = None,
     dtype: Dtype = Dtypes.float64,
     plot: Plot = False,
     verbose: Verbose = False,
@@ -313,7 +322,7 @@ def differential_sample_programs(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
     model_args = model_cfg(
-        radius, alpha, gene_center, dtype, spot_operator, sample_weighting, normalise_by
+        radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
     )
 
     adata_samples, sample_names = load_preprocess_samples(
@@ -324,7 +333,12 @@ def differential_sample_programs(
     )
 
     model = SpatialGeneSampleContrastKPCA(
-        positive_samples=idx_a, negative_samples=idx_b, verbose=verbose, **model_args
+        positive_samples=idx_a,
+        negative_samples=idx_b,
+        block_size=block_size,
+        dtype=dtype,
+        verbose=verbose,
+        **model_args,
     ).fit(W, coords, n_components, labels, covariates_matrix)
 
     adata_samples = store_multi_sample_result(adata_samples, sample_names, model, cmd_id, plot)
@@ -362,6 +376,7 @@ def marker_programs(
     covariates: Covariates = None,
     alpha: Alpha = 1.0,
     gene_center: GeneCenter = False,
+    block_size: BlockSize = None,
     dtype: Dtype = Dtypes.float64,
     plot: Plot = False,
     verbose: Verbose = False,
@@ -371,16 +386,16 @@ def marker_programs(
     pre_args = preprocess_cfg(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
-    model_args = model_cfg(radius, alpha, gene_center, dtype)
+    model_args = model_cfg(radius, alpha, gene_center)
 
     adata = load_preprocess_sample(fname, exclude=exclude_labels, verbose=verbose, **pre_args)
     _require_obs_key(adata, label_key, "--label-key")
     W, coords, covariates_matrix = get_spatial_from_anndata(adata, layer)
     labels = adata.obs[label_key]
 
-    model = SpatialGeneContrastKPCA.between_labels(verbose=verbose, **model_args).fit(
-        W, coords, n_components, labels, covariates_matrix
-    )
+    model = SpatialGeneContrastKPCA.between_labels(
+        block_size=block_size, dtype=dtype, verbose=verbose, **model_args
+    ).fit(W, coords, n_components, labels, covariates_matrix)
     add_metadata(adata, cmd_id, pre_args, model_args)
     store_sample_result(adata, model, cmd_id)
 
@@ -413,6 +428,7 @@ def gene_scores(
     alpha: Alpha = 1.0,
     spot_operator: SpotOperator = SpotOperatorTypes.sample,
     gene_center: GeneCenter = False,
+    block_size: BlockSize = None,
     dtype: Dtype = Dtypes.float64,
     verbose: Verbose = False,
 ):
@@ -435,6 +451,7 @@ def gene_scores(
         alpha,
         spot_operator,
         gene_center,
+        block_size,
         dtype,
     )
     obs_labels = _parse_labels(adata, subset_labels, label_key)

@@ -125,6 +125,7 @@ class SpatialGeneKPCA(KPCAModel):
         kernel="wendland_c2",
         eps=1e-12,
         covariates_tol=1e-10,
+        block_size=None,
         dtype=np.float64,
         verbose=False,
     ):
@@ -135,6 +136,7 @@ class SpatialGeneKPCA(KPCAModel):
         self.kernel = kernel
         self.eps = eps
         self.covariates_tol = covariates_tol
+        self.block_size = block_size
         self.dtype = np.dtype(dtype)
         self.verbose = verbose
 
@@ -143,7 +145,7 @@ class SpatialGeneKPCA(KPCAModel):
 
         spec = SpotOperatorSpec(self.spot_operator)
         S = spec.build(Kc, sample_groups, label_groups, covc, self.covariates_tol, self.dtype)
-        diag = np.maximum(S.gene_spatial_variance(Wc), self.eps)
+        diag = np.maximum(S.gene_spatial_variance(Wc, self.block_size), self.eps)
         scale = gene_scale_from_diag(diag, self.alpha, self.eps)
 
         op = GeneKernel(Wc, S, scale, self.gene_center, self.dtype)
@@ -186,6 +188,7 @@ class SpatialGeneContrastKPCA(KPCAModel):
         kernel="wendland_c2",
         eps=1e-12,
         covariates_tol=1e-10,
+        block_size=None,
         dtype=np.float64,
         verbose=False,
     ):
@@ -198,6 +201,7 @@ class SpatialGeneContrastKPCA(KPCAModel):
         self.kernel = kernel
         self.eps = eps
         self.covariates_tol = covariates_tol
+        self.block_size = block_size
         self.dtype = np.dtype(dtype)
         self.verbose = verbose
 
@@ -221,8 +225,8 @@ class SpatialGeneContrastKPCA(KPCAModel):
         S_left = make_S(self.left_operator)
         S_right = make_S(self.right_operator)
 
-        diag_left = np.maximum(S_left.gene_spatial_variance(Wc), self.eps)
-        diag_right = np.maximum(S_right.gene_spatial_variance(Wc), self.eps)
+        diag_left = np.maximum(S_left.gene_spatial_variance(Wc, self.block_size), self.eps)
+        diag_right = np.maximum(S_right.gene_spatial_variance(Wc, self.block_size), self.eps)
 
         ref = diag_left if self.normalise_by == "left" else diag_right
         scale = gene_scale_from_diag(ref, self.alpha, self.eps)
@@ -273,6 +277,7 @@ class SpatialGeneSampleCombinedKPCA(KPCAModel):
         kernel="wendland_c2",
         eps=1e-12,
         covariates_tol=1e-10,
+        block_size=None,
         dtype=np.float64,
         verbose=False,
     ):
@@ -285,6 +290,7 @@ class SpatialGeneSampleCombinedKPCA(KPCAModel):
         self.kernel = kernel
         self.eps = eps
         self.covariates_tol = covariates_tol
+        self.block_size = block_size
         self.dtype = np.dtype(dtype)
         self.verbose = verbose
 
@@ -297,6 +303,7 @@ class SpatialGeneSampleCombinedKPCA(KPCAModel):
             self.gene_center,
             self.eps,
             self.covariates_tol,
+            self.block_size,
             self.dtype,
         )
         ops, diags, coeff = builder.build(samples)
@@ -351,6 +358,7 @@ class SpatialGeneSampleContrastKPCA(KPCAModel):
         kernel="wendland_c2",
         eps=1e-12,
         covariates_tol=1e-10,
+        block_size=None,
         dtype=np.float64,
         verbose=False,
     ):
@@ -365,6 +373,7 @@ class SpatialGeneSampleContrastKPCA(KPCAModel):
         self.kernel = kernel
         self.eps = eps
         self.covariates_tol = covariates_tol
+        self.block_size = block_size
         self.dtype = np.dtype(dtype)
         self.verbose = verbose
 
@@ -394,6 +403,7 @@ class SpatialGeneSampleContrastKPCA(KPCAModel):
             self.gene_center,
             self.eps,
             self.covariates_tol,
+            self.block_size,
             self.dtype,
         )
         ops, diags, coeff = builder.build(samples, signed_coefficients=signed)

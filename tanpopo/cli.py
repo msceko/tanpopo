@@ -175,12 +175,19 @@ SampleNormaliseBy = Annotated[
         help="Gene scaling reference for sample-wise models.",
     ),
 ]
+BlockSize = Annotated[
+    int | None,
+    typer.Option(
+        "--block-size",
+        help="Maximum number of genes to compute at one time. Helps reduce memory requirements.",
+    ),
+]
 Dtype = Annotated[
     Dtypes,
     typer.Option(
         "--dtype",
         help="Data type used for internal calculation. "
-        "Use `float32` to lower memory cost with potentially reduced numerical accuracy.",
+        "Use `float32` to lower memory requirements with potentially reduced numerical accuracy.",
     ),
 ]
 
