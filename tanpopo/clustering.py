@@ -3,7 +3,7 @@ import pandas as pd
 import scanpy as sc
 import matplotlib.pyplot as plt
 
-from tanpopo.plot import plot_gene_clusters, plot_umap
+from tanpopo.plot import plot_labels, plot_gene_clusters, plot_umap
 from tanpopo.utils import timed
 
 
@@ -32,11 +32,7 @@ def cluster_spots(adata, neighbours, resolution, metric, key, key_added, plot, u
         adata.obs[key_added] = cluster_leiden(adata.obsm[key], neighbours, resolution, metric)
 
     if plot:
-        ax = sc.pl.embedding(
-            adata, basis="spatial", color=key_added, palette="tab20", frameon=False, show=False
-        )
-        ax.invert_yaxis()
-        ax.axis("equal")
+        plot_labels(adata, key_added)
     if umap:
         plot_umap(adata.obsm[key], adata.obs[key_added], adata.obs_names, neighbours)
     plt.show()

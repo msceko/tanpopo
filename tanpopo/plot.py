@@ -85,3 +85,12 @@ def plot_umap(X, obs, obs_names, n_neighbors, min_dist=0.1, spread=1.0, **kwargs
     sc.pp.neighbors(adata, n_neighbors=n_neighbors, use_rep="X")
     sc.tl.umap(adata, min_dist=min_dist, spread=spread)
     sc.pl.umap(adata, color="umap", size=20, palette="tab20", **kwargs)
+
+
+def plot_labels(adata, key):
+    """Plot spot labels"""
+    ax = sc.pl.embedding(
+        adata, basis="spatial", color=key, palette="tab20", frameon=False, show=False
+    )
+    ax.invert_yaxis()
+    ax.axis("equal")

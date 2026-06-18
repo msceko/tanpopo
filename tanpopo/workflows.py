@@ -21,7 +21,7 @@ from tanpopo.models import (
     SpatialGeneSampleCombinedKPCA,
 )
 from tanpopo.clustering import cluster_genes, cluster_spots
-from tanpopo.plot import plot_spatial_modes
+from tanpopo.plot import plot_spatial_modes, plot_labels
 from tanpopo.utils import argtop, pd_dtype, timed
 from tanpopo.analysis import print_top_genes_per_basis
 from tanpopo.cli import *
@@ -539,17 +539,30 @@ def cluster(
 
 
 @app.command(no_args_is_help=True)
-def plot(fname: InputPath, cmd_id: ExperimentId = "spatial", verbose: Verbose = False):
-    """Plot spatial gene programs."""
+def plot(
+    fname: InputPath,
+    cmd_id: ExperimentId = None,
+    label_key: LabelKey = None,
+    verbose: Verbose = False,
+):
+    """Plot spatial gene programs or spot labels."""
     with timed("Loading data", verbose):
         adata = sc.read_h5ad(fname)
-    if verbose:
-        print_top_genes_per_basis(
-            adata.varm[f"tanpopo_{cmd_id}_eigenvectors"],
-            adata.varm[f"tanpopo_{cmd_id}_gene_loadings"],
-            adata.var_names,
-        )
-    plot_spatial_modes(adata, adata.obsm[f"tanpopo_{cmd_id}_spot_modes"])
+        print(adata)
+
+    if label_key is not None:
+        _require_obs_key(adata, label_key, "--label-key")
+        plot_labels(adata, label_key)
+
+    if cmd_id is not None:
+        if verbose:
+            print_top_genes_per_basis(
+                adata.varm[f"tanpopo_{cmd_id}_eigenvectors"],
+                adata.varm[f"tanpopo_{cmd_id}_gene_loadings"],
+                adata.var_names,
+            )
+        plot_spatial_modes(adata, adata.obsm[f"tanpopo_{cmd_id}_spot_modes"])
+
     plt.show()
 
 

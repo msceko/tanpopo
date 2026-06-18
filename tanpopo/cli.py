@@ -270,7 +270,7 @@ Umap = Annotated[
 # Misc
 # ------------------------------------------------------------------------------
 ExperimentId = Annotated[
-    str,
+    str | None,
     typer.Option(
         "--experiment-id",
         "-id",
