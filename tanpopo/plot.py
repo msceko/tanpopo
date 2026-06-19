@@ -48,7 +48,7 @@ def plot_spatial_modes(adata, phi, clip=(1, 99), cmap="coolwarm", vcenter=0, **k
     for k in range(n_modes):
         keys.append(f"{prefix}_{k}")
         empty_adata.obs[keys[k]] = phi[:, k]
-        a, b = np.percentile(phi[:, k], clip)
+        a, b = np.nanpercentile(phi[:, k], clip)
         vmin.append(min(a, -1e-12))
         vmax.append(max(b, 1e-12))
 
