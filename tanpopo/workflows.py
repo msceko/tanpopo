@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import scanpy as sc
 import matplotlib.pyplot as plt
 import typer
@@ -25,6 +26,19 @@ from tanpopo.plot import plot_spatial_modes, plot_labels
 from tanpopo.utils import argtop, pd_dtype, timed
 from tanpopo.analysis import print_top_genes_per_basis
 from tanpopo.cli import *
+
+
+def _require_gseapy():
+    try:
+        import gseapy
+    except ImportError:
+        typer.echo(
+            "The 'gsea' command requires gseapy.\n" "Install it with: pip install 'tanpopo[gsea]'",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    return gseapy
 
 
 def _require_obs_key(adata, key, option):
@@ -471,6 +485,43 @@ def gene_scores(
 
 
 @app.command(no_args_is_help=True)
+def gsea(
+    fname: InputPath,
+    cmd_id: ExperimentId = "spatial",
+    verbose: Verbose = False,
+):
+    """Gene-set enrichment analysis using spatial gene programs as gene ranks."""
+    gp = _require_gseapy()
+
+    with timed("Loading data", verbose):
+        adata = sc.read_h5ad(fname)
+    if verbose:
+        print(adata)
+
+    rm_prefixes = ("MT-", "RPL", "RPS")
+    df = pd.DataFrame(adata.varm[f"tanpopo_{cmd_id}_eigenvectors"], adata.var_names)
+
+    for mode in df:
+        rnk = df[mode]
+        rnk = rnk.dropna().groupby(level=0).mean().sort_values(ascending=False)
+        rnk = rnk[~rnk.index.str.startswith(rm_prefixes)]
+
+        pre_res = gp.prerank(
+            rnk=rnk,
+            gene_sets="MSigDB_Hallmark_2020",
+            min_size=15,
+            max_size=500,
+            permutation_num=1000,
+            outdir=None,
+            seed=42,
+            verbose=True,
+        )
+
+        results = pre_res.res2d
+        print(results)
+
+
+@app.command(no_args_is_help=True)
 def estimate_spacing(fname: InputPath):
     """Compute average distance to closest neighbour."""
     with timed("Loading data", enabled=True):
@@ -512,6 +563,8 @@ def cluster(
     """Cluster spots or genes based on spatial gene programs."""
     with timed("Loading data", verbose):
         adata = sc.read_h5ad(fname)
+    if verbose:
+        print(adata)
 
     # filter top n genes
     if ngenes:
@@ -548,6 +601,7 @@ def plot(
     """Plot spatial gene programs or spot labels."""
     with timed("Loading data", verbose):
         adata = sc.read_h5ad(fname)
+    if verbose:
         print(adata)
 
     if label_key is not None:

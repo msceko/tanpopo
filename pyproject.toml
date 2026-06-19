@@ -24,6 +24,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gsea = [
+  "gseapy",
+]
 dev = [
   "black",
 ]
