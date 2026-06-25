@@ -281,6 +281,13 @@ Plot = Annotated[
     bool,
     typer.Option("--plot", help="Plot results."),
 ]
+Modes = Annotated[
+    str | None,
+    typer.Option(
+        "--modes",
+        help=("Specify modes to plot, either comma separated or use colon slicing syntax."),
+    ),
+]
 Verbose = Annotated[
     bool,
     typer.Option("--verbose", help="Print timing information."),

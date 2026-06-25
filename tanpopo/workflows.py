@@ -71,6 +71,19 @@ def _parse_labels(adata, labels, key):
     return obs_labels
 
 
+def _parse_slice(text, option):
+    if text is None:
+        return slice(None)
+    if ":" in text:
+        parts = text.split(":")
+        if len(parts) > 3:
+            raise typer.BadParameter(f"{option}={text} is not a valid slice")
+        return slice(*(int(x) if x else None for x in parts))
+    if "," in text:
+        return np.array([int(x) for x in text.split(",")])
+    return int(text)
+
+
 def _get_spatial_inputs_for_samples(adata_samples, layer, spot_operator, label_key=None):
     W, coords, covariates_matrix, labels = [], [], [], [] if spot_operator == "label" else None
 
@@ -488,6 +501,7 @@ def gene_scores(
 def gsea(
     fname: InputPath,
     cmd_id: ExperimentId = "spatial",
+    modes: Modes = None,
     verbose: Verbose = False,
 ):
     """Gene-set enrichment analysis using spatial gene programs as gene ranks."""
@@ -499,9 +513,10 @@ def gsea(
         print(adata)
 
     rm_prefixes = ("MT-", "RPL", "RPS")
+    idx = _parse_slice(modes, "--modes")
     df = pd.DataFrame(adata.varm[f"tanpopo_{cmd_id}_eigenvectors"], adata.var_names)
 
-    for mode in df:
+    for mode in df.columns[idx]:
         rnk = df[mode]
         rnk = rnk.dropna().groupby(level=0).mean().sort_values(ascending=False)
         rnk = rnk[~rnk.index.str.startswith(rm_prefixes)]
@@ -518,6 +533,7 @@ def gsea(
         )
 
         results = pre_res.res2d
+        print(f"Mode {mode}")
         print(results)
 
 
@@ -596,6 +612,7 @@ def plot(
     fname: InputPath,
     cmd_id: ExperimentId = None,
     label_key: LabelKey = None,
+    modes: Modes = None,
     verbose: Verbose = False,
 ):
     """Plot spatial gene programs or spot labels."""
@@ -609,13 +626,14 @@ def plot(
         plot_labels(adata, label_key)
 
     if cmd_id is not None:
+        idx = _parse_slice(modes, "--modes")
         if verbose:
             print_top_genes_per_basis(
-                adata.varm[f"tanpopo_{cmd_id}_eigenvectors"],
-                adata.varm[f"tanpopo_{cmd_id}_gene_loadings"],
+                adata.varm[f"tanpopo_{cmd_id}_eigenvectors"][:, idx],
+                adata.uns["tanpopo"][cmd_id]["eigenvalues"][idx],
                 adata.var_names,
             )
-        plot_spatial_modes(adata, adata.obsm[f"tanpopo_{cmd_id}_spot_modes"])
+        plot_spatial_modes(adata, adata.obsm[f"tanpopo_{cmd_id}_spot_modes"][:, idx])
 
     plt.show()
 

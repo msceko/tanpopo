@@ -91,8 +91,8 @@ def top_genes_per_basis(eigvecs, genes, n_top, mode="abs"):
     return top_genes
 
 
-def print_top_genes(scores, genes, n_top):
-    top_genes, top_scores = top_scored_genes(scores, genes, n_top)
+def print_top_genes(scores, genes, n_top, mode="abs"):
+    top_genes, top_scores = top_scored_genes(scores, genes, n_top, mode)
     for gene, score in zip(top_genes, top_scores):
         print(f"{gene:15s} {score:+.3f}")
 
