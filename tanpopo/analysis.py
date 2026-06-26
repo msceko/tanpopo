@@ -5,7 +5,9 @@ import typer
 from tanpopo.utils import argtop
 
 
-def compare_component_spaces(loadings_a, loadings_b, eigenvalues_a, eigenvalues_b):
+def compare_component_spaces(
+    loadings_a, loadings_b, eigenvalues_a, eigenvalues_b, key="component"
+):
     """Compute directional, subspace, and spectral comparison metrics."""
     norms_a = np.linalg.norm(loadings_a, axis=0)
     norms_b = np.linalg.norm(loadings_b, axis=0)
@@ -28,7 +30,7 @@ def compare_component_spaces(loadings_a, loadings_b, eigenvalues_a, eigenvalues_
     spectral_fraction_a = np.abs(eigenvalues_a) / np.sum(np.abs(eigenvalues_a))
     spectral_fraction_b = np.abs(eigenvalues_b) / np.sum(np.abs(eigenvalues_b))
 
-    # approximate the importance that B's retained modes assign to each A program
+    # approximate the importance that B's retained modes assign to each A component
     signed_spectral_score_b = squared_cosine @ eigenvalues_b
     absolute_spectral_score_b = squared_cosine @ np.abs(eigenvalues_b)
 
@@ -37,8 +39,8 @@ def compare_component_spaces(loadings_a, loadings_b, eigenvalues_a, eigenvalues_
         best_j = int(np.argmax(absolute_cosine[i]))
         rows.append(
             {
-                "program_a": i,
-                "best_program_b": best_j,
+                f"{key}_a": i,
+                f"best_{key}_b": best_j,
                 "signed_cosine": signed_cosine[i, best_j],
                 "absolute_cosine": absolute_cosine[i, best_j],
                 "subspace_overlap_b": subspace_overlap[i],

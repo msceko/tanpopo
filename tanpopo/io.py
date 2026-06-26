@@ -1,6 +1,9 @@
+import h5py
 import typer
 import numpy as np
+import pandas as pd
 import scanpy as sc
+from anndata.io import read_elem
 
 from tanpopo.data import preprocess_anndata, preprocess_anndata_shared_genes
 from tanpopo.plot import plot_spatial_modes
@@ -81,20 +84,31 @@ def load_preprocess_samples(
     return adata_samples, sample_names
 
 
-def load_programs(fname, cmd_id, components):
-    """Load gene programs and eigenvalues from previous analysis"""
-    adata = sc.read_h5ad(fname)
-    key = f"tanpopo_{cmd_id}_eigenvectors"
-    if key not in adata.varm:
-        raise typer.BadParameter(f"{key!r} is not present in {fname}.")
+def _load_modes(fname, cmd_id, suffix, attr, components):
+    key = f"tanpopo_{cmd_id}_{suffix}"
+    with h5py.File(fname, "r") as f:
+        if key not in f[attr]:
+            raise typer.BadParameter(f"{cmd_id} is not present in {fname}.")
+        eigenvalues = np.array(read_elem(f[f"uns/tanpopo/{cmd_id}/eigenvalues"]))
+        eigenmodes = np.array(read_elem(f[f"{attr}/{key}"]))
+        var_names = pd.Index(read_elem(f["var/_index"]))
 
-    eigenvalues = adata.uns["tanpopo"][cmd_id]["eigenvalues"]
-    eigenvectors = np.asarray(adata.varm[key])
     if components is not None:
         eigenvalues = eigenvalues[:components]
-        eigenvectors = eigenvectors[:, :components]
+        eigenmodes = eigenmodes[:, :components]
 
-    return eigenvalues, eigenvectors, adata.var_names
+    return eigenvalues, eigenmodes, var_names
+
+
+def load_programs(fname, cmd_id, components):
+    """Load gene programs and eigenvalues without loading the full AnnData object."""
+    return _load_modes(fname, cmd_id, "eigenvectors", "varm", components)
+
+
+def load_spot_modes(fname, cmd_id, components):
+    """Load spot modes and eigenvalues without loading the full AnnData object."""
+    eigenvalues, spot_modes, _ = _load_modes(fname, cmd_id, "spot_modes", "obsm", components)
+    return eigenvalues, spot_modes
 
 
 def preprocess_cfg(

@@ -9,6 +9,7 @@ from tanpopo.io import (
     load_preprocess_sample,
     load_preprocess_samples,
     load_programs,
+    load_spot_modes,
     preprocess_cfg,
     model_cfg,
     add_metadata,
@@ -498,6 +499,13 @@ def gene_scores(
     return adata
 
 
+def _require_two_inputs(fnames, cmd_ids, cmd):
+    if len(fnames) != 2:
+        raise typer.BadParameter(f"{cmd} requires exactly two --input files.")
+    if len(cmd_ids) != 2:
+        raise typer.BadParameter(f"{cmd} requires exactly two --input files.")
+
+
 @app.command(no_args_is_help=True)
 def compare_programs(
     fname: InputPaths,
@@ -506,11 +514,8 @@ def compare_programs(
     components: Components = None,
     verbose: Verbose = False,
 ):
-    """Compare gene programs from two tanpopo analyses."""
-    if len(fname) != 2:
-        raise typer.BadParameter("compare-programs requires exactly two --input files.")
-    if len(cmd_id) < 2:
-        cmd_id *= 2
+    """Compare gene programs from two analyses."""
+    _require_two_inputs(fname, cmd_id, "compare-programs")
 
     eigenvalues_a, loadings_a, genes_a = load_programs(fname[0], cmd_id[0], components)
     eigenvalues_b, loadings_b, genes_b = load_programs(fname[1], cmd_id[1], components)
@@ -522,7 +527,40 @@ def compare_programs(
     loadings_a = loadings_a[genes_a.get_indexer(common_genes)]
     loadings_b = loadings_b[genes_b.get_indexer(common_genes)]
 
-    result = compare_component_spaces(loadings_a, loadings_b, eigenvalues_a, eigenvalues_b)
+    result = compare_component_spaces(
+        loadings_a, loadings_b, eigenvalues_a, eigenvalues_b, key="program"
+    )
+
+    if output is not None:
+        result.to_csv(output, index=False)
+    if verbose:
+        print(result.to_string(index=False))
+
+
+@app.command(no_args_is_help=True)
+def compare_spot_modes(
+    fname: InputPaths,
+    cmd_id: ExperimentIds,
+    output: OutputPath = None,
+    components: Components = None,
+    verbose: Verbose = False,
+):
+    """Compare spot modes from two analyses of the same sample."""
+    _require_two_inputs(fname, cmd_id, "compare-spot-modes")
+
+    eigenvalues_a, modes_a = load_spot_modes(fname, cmd_id[0], components)
+    eigenvalues_b, modes_b = load_spot_modes(fname, cmd_id[1], components)
+
+    valid_spots = np.all(np.isfinite(modes_a), axis=1) & np.all(np.isfinite(modes_b), axis=1)
+
+    modes_a = modes_a[valid_spots]
+    modes_b = modes_b[valid_spots]
+    modes_a = modes_a - np.mean(modes_a, axis=0, keepdims=True)
+    modes_b = modes_b - np.mean(modes_b, axis=0, keepdims=True)
+
+    result = compare_component_spaces(
+        modes_a, modes_b, eigenvalues_a, eigenvalues_b, key="spot_mode"
+    )
 
     if output is not None:
         result.to_csv(output, index=False)
