@@ -81,6 +81,22 @@ def load_preprocess_samples(
     return adata_samples, sample_names
 
 
+def load_programs(fname, cmd_id, components):
+    """Load gene programs and eigenvalues from previous analysis"""
+    adata = sc.read_h5ad(fname)
+    key = f"tanpopo_{cmd_id}_eigenvectors"
+    if key not in adata.varm:
+        raise typer.BadParameter(f"{key!r} is not present in {fname}.")
+
+    eigenvalues = adata.uns["tanpopo"][cmd_id]["eigenvalues"]
+    eigenvectors = np.asarray(adata.varm[key])
+    if components is not None:
+        eigenvalues = eigenvalues[:components]
+        eigenvectors = eigenvectors[:, :components]
+
+    return eigenvalues, eigenvectors, adata.var_names
+
+
 def preprocess_cfg(
     target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
 ):

@@ -52,7 +52,7 @@ InputPaths = Annotated[
     typer.Option(
         "--input",
         "-i",
-        help="Input .h5ad file. Supply once per sample for multi-sample workflows.",
+        help="Input .h5ad file. Supply once per sample.",
         exists=True,
         dir_okay=False,
         readable=True,
@@ -145,7 +145,7 @@ class Dtypes(str, Enum):
 
 
 Components = Annotated[
-    int,
+    int | None,
     typer.Option("--components", "-k", help="Number of spatial components."),
 ]
 Radius = Annotated[
@@ -274,7 +274,15 @@ ExperimentId = Annotated[
     typer.Option(
         "--experiment-id",
         "-id",
-        help=("Experiment ID used to namespace Tanpopo outputs. Defaults to the workflow name."),
+        help=("Experiment ID used to namespace Tanpopo outputs."),
+    ),
+]
+ExperimentIds = Annotated[
+    list[str],
+    typer.Option(
+        "--experiment-id",
+        "-id",
+        help="Experiment IDs used to namespace Tanpopo outputs.",
     ),
 ]
 Plot = Annotated[
@@ -285,7 +293,7 @@ Modes = Annotated[
     str | None,
     typer.Option(
         "--modes",
-        help=("Specify modes to plot, either comma separated or use colon slicing syntax."),
+        help=("Subset of modes, either comma separated or use colon slicing syntax."),
     ),
 ]
 Verbose = Annotated[

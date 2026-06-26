@@ -1,6 +1,57 @@
 import numpy as np
+import pandas as pd
+import typer
 
 from tanpopo.utils import argtop
+
+
+def compare_component_spaces(loadings_a, loadings_b, eigenvalues_a, eigenvalues_b):
+    """Compute directional, subspace, and spectral comparison metrics."""
+    norms_a = np.linalg.norm(loadings_a, axis=0)
+    norms_b = np.linalg.norm(loadings_b, axis=0)
+    if np.any(norms_a == 0) or np.any(norms_b == 0):
+        raise typer.BadParameter("At least one component has zero loading norm.")
+
+    unit_a = loadings_a / norms_a
+    unit_b = loadings_b / norms_b
+
+    signed_cosine = unit_a.T @ unit_b
+    squared_cosine = signed_cosine**2
+    absolute_cosine = np.abs(signed_cosine)
+
+    # how much of each A component lies in the complete B component subspace
+    basis_b, _ = np.linalg.qr(unit_b)
+    subspace_overlap = np.sum((basis_b.T @ unit_a) ** 2, axis=0)
+    subspace_overlap = np.clip(subspace_overlap, 0.0, 1.0)
+
+    # belative importance within each retained spectrum
+    spectral_fraction_a = np.abs(eigenvalues_a) / np.sum(np.abs(eigenvalues_a))
+    spectral_fraction_b = np.abs(eigenvalues_b) / np.sum(np.abs(eigenvalues_b))
+
+    # approximate the importance that B's retained modes assign to each A program
+    signed_spectral_score_b = squared_cosine @ eigenvalues_b
+    absolute_spectral_score_b = squared_cosine @ np.abs(eigenvalues_b)
+
+    rows = []
+    for i in range(unit_a.shape[1]):
+        best_j = int(np.argmax(absolute_cosine[i]))
+        rows.append(
+            {
+                "program_a": i,
+                "best_program_b": best_j,
+                "signed_cosine": signed_cosine[i, best_j],
+                "absolute_cosine": absolute_cosine[i, best_j],
+                "subspace_overlap_b": subspace_overlap[i],
+                "eigenvalue_a": eigenvalues_a[i],
+                "eigenvalue_b": eigenvalues_b[best_j],
+                "spectral_fraction_a": spectral_fraction_a[i],
+                "spectral_fraction_b": spectral_fraction_b[best_j],
+                "signed_spectral_score_b": signed_spectral_score_b[i],
+                "absolute_spectral_score_b": absolute_spectral_score_b[i],
+            }
+        )
+
+    return pd.DataFrame(rows)
 
 
 def fractional_energy(phi, eps=1e-12):

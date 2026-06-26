@@ -8,6 +8,7 @@ from sklearn.neighbors import NearestNeighbors
 from tanpopo.io import (
     load_preprocess_sample,
     load_preprocess_samples,
+    load_programs,
     preprocess_cfg,
     model_cfg,
     add_metadata,
@@ -24,7 +25,7 @@ from tanpopo.models import (
 from tanpopo.clustering import cluster_genes, cluster_spots
 from tanpopo.plot import plot_spatial_modes, plot_labels
 from tanpopo.utils import argtop, pd_dtype, timed
-from tanpopo.analysis import print_top_genes_per_basis
+from tanpopo.analysis import compare_component_spaces, print_top_genes_per_basis
 from tanpopo.cli import *
 
 
@@ -495,6 +496,38 @@ def gene_scores(
                 print(f"{gene_name:15s} {gene_score:.2f}")
 
     return adata
+
+
+@app.command(no_args_is_help=True)
+def compare_programs(
+    fname: InputPaths,
+    cmd_id: ExperimentIds,
+    output: OutputPath = None,
+    components: Components = None,
+    verbose: Verbose = False,
+):
+    """Compare gene programs from two tanpopo analyses."""
+    if len(fname) != 2:
+        raise typer.BadParameter("compare-programs requires exactly two --input files.")
+    if len(cmd_id) < 2:
+        cmd_id *= 2
+
+    eigenvalues_a, loadings_a, genes_a = load_programs(fname[0], cmd_id[0], components)
+    eigenvalues_b, loadings_b, genes_b = load_programs(fname[1], cmd_id[1], components)
+
+    common_genes = genes_a.intersection(genes_b, sort=False)
+    if len(common_genes) == 0:
+        raise typer.BadParameter("The two files do not share any genes.")
+
+    loadings_a = loadings_a[genes_a.get_indexer(common_genes)]
+    loadings_b = loadings_b[genes_b.get_indexer(common_genes)]
+
+    result = compare_component_spaces(loadings_a, loadings_b, eigenvalues_a, eigenvalues_b)
+
+    if output is not None:
+        result.to_csv(output, index=False)
+    if verbose:
+        print(result.to_string(index=False))
 
 
 @app.command(no_args_is_help=True)
