@@ -90,6 +90,16 @@ OutputPath = Annotated[
         writable=True,
     ),
 ]
+OutputImagePath = Annotated[
+    Path | None,
+    typer.Option(
+        "--output",
+        "-o",
+        help="Save plot to image file.",
+        dir_okay=False,
+        writable=True,
+    ),
+]
 Layer = Annotated[
     str | None,
     typer.Option("--layer", help="AnnData layer to use instead of X."),
@@ -97,6 +107,13 @@ Layer = Annotated[
 LabelKey = Annotated[
     str | None,
     typer.Option("--label-key", help="obs column defining labels/cell types."),
+]
+ReferenceKey = Annotated[
+    str | None,
+    typer.Option(
+        "--reference-key",
+        help="obs column containing reference labels to compare with --label-key.",
+    ),
 ]
 Labels = Annotated[
     str | None,
@@ -288,6 +305,10 @@ ExperimentIds = Annotated[
 Plot = Annotated[
     bool,
     typer.Option("--plot", help="Plot results."),
+]
+ShowPlot = Annotated[
+    bool,
+    typer.Option("--show/--no-show", help="Show plot."),
 ]
 Modes = Annotated[
     str | None,

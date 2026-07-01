@@ -24,7 +24,7 @@ from tanpopo.models import (
     SpatialGeneSampleCombinedKPCA,
 )
 from tanpopo.clustering import cluster_genes, cluster_spots
-from tanpopo.plot import plot_spatial_modes, plot_labels
+from tanpopo.plot import plot_spatial_modes, plot_labels, plot_labels_to_reference
 from tanpopo.utils import argtop, pd_dtype, timed
 from tanpopo.analysis import compare_component_spaces, print_top_genes_per_basis
 from tanpopo.cli import *
@@ -47,7 +47,10 @@ def _require_obs_key(adata, key, option):
     if key is None:
         raise typer.BadParameter(f"{option} is required for this workflow.")
     if key not in adata.obs:
-        raise typer.BadParameter(f"{option}={key} is not present in adata.obs.")
+        available = " ".join([f"'{key}'" for key in adata.obs.keys()])
+        raise typer.BadParameter(
+            f"{option}={key} is not present in adata.obs. Available keys: {available}"
+        )
     return key
 
 
@@ -681,9 +684,12 @@ def cluster(
 @app.command(no_args_is_help=True)
 def plot(
     fname: InputPath,
+    output: OutputImagePath = None,
     cmd_id: ExperimentId = None,
     label_key: LabelKey = None,
+    reference_key: ReferenceKey = None,
     modes: Modes = None,
+    show: ShowPlot = True,
     verbose: Verbose = False,
 ):
     """Plot spatial gene programs or spot labels."""
@@ -694,7 +700,13 @@ def plot(
 
     if label_key is not None:
         _require_obs_key(adata, label_key, "--label-key")
-        plot_labels(adata, label_key)
+        adata.obs[label_key] = adata.obs[label_key].astype("category")
+
+        if reference_key is not None:
+            _require_obs_key(adata, reference_key, "--reference-key")
+            plot_labels_to_reference(adata, label_key, reference_key)
+        else:
+            plot_labels(adata, label_key)
 
     if cmd_id is not None:
         idx = _parse_slice(modes, "--modes")
@@ -706,7 +718,10 @@ def plot(
             )
         plot_spatial_modes(adata, adata.obsm[f"tanpopo_{cmd_id}_spot_modes"][:, idx])
 
-    plt.show()
+    if output is not None:
+        plt.savefig(output, bbox_inches="tight")
+    if show:
+        plt.show()
 
 
 def main():
