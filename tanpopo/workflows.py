@@ -59,6 +59,17 @@ def _require_multi_input(fnames, cmd):
         raise typer.BadParameter(f"{cmd} requires at least two --input files.")
 
 
+def _parse_comma_separated_args(args):
+    return [arg.strip() for arg in args.split(",")] if args is not None else None
+
+
+def _parse_include_exclude(include, exclude):
+    return {
+        "include": _parse_comma_separated_args(include),
+        "exclude": _parse_comma_separated_args(exclude),
+    }
+
+
 def _parse_labels(adata, labels, key):
     if labels is None:
         return [""]
@@ -123,6 +134,7 @@ def spatial_programs(
     layer: Layer = None,
     label_key: LabelKey = None,
     subset_labels: Labels = None,
+    include: Include = None,
     exclude: Exclude = None,
     transform: Transform = None,
     min_counts: MinCounts = 10,
@@ -138,13 +150,13 @@ def spatial_programs(
     verbose: Verbose = False,
 ):
     """Spatial gene programs in a sample, optionally within labels."""
-    exclude_labels = [l.strip() for l in exclude.split(",")] if exclude is not None else None
+    incl_excl_args = _parse_include_exclude(include, exclude)
     pre_args = preprocess_cfg(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
     model_args = model_cfg(radius, alpha, gene_center, spot_operator)
 
-    adata = load_preprocess_sample(fname, exclude=exclude_labels, verbose=verbose, **pre_args)
+    adata = load_preprocess_sample(fname, verbose=verbose, **pre_args, **incl_excl_args)
     if subset_labels is not None or spot_operator == "label":
         _require_obs_key(adata, label_key, "--label-key")
     obs_labels = _parse_labels(adata, subset_labels, label_key)
@@ -186,6 +198,7 @@ def shared_programs(
     n_components: Components = 8,
     layer: Layer = None,
     label_key: LabelKey = None,
+    include: Include = None,
     exclude: Exclude = None,
     transform: Transform = None,
     min_counts: MinCounts = 10,
@@ -204,7 +217,7 @@ def shared_programs(
 ):
     """Shared spatial gene programs across multiple samples."""
     _require_multi_input(fnames, "shared-programs")
-    exclude_labels = [l.strip() for l in exclude.split(",")] if exclude is not None else None
+    incl_excl_args = _parse_include_exclude(include, exclude)
     pre_args = preprocess_cfg(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
@@ -213,7 +226,7 @@ def shared_programs(
     )
 
     adata_samples, sample_names = load_preprocess_samples(
-        fnames, sample_names, exclude=exclude_labels, verbose=verbose, **pre_args
+        fnames, sample_names, verbose=verbose, **pre_args, **incl_excl_args
     )
     if spot_operator == "label":
         _require_obs_key(adata_samples, label_key, "--label-key")
@@ -246,6 +259,7 @@ def differential_label_programs(
     radius: Radius = 150,
     n_components: Components = 8,
     layer: Layer = None,
+    include: Include = None,
     exclude: Exclude = None,
     transform: Transform = None,
     min_counts: MinCounts = 10,
@@ -263,7 +277,7 @@ def differential_label_programs(
     verbose: Verbose = False,
 ):
     """Differential gene programs enriched in one label versus the rest."""
-    exclude_labels = [l.strip() for l in exclude.split(",")] if exclude is not None else None
+    incl_excl_args = _parse_include_exclude(include, exclude)
     pre_args = preprocess_cfg(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
@@ -271,7 +285,7 @@ def differential_label_programs(
         radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
     )
 
-    adata = load_preprocess_sample(fname, exclude=exclude_labels, verbose=verbose, **pre_args)
+    adata = load_preprocess_sample(fname, verbose=verbose, **pre_args, **incl_excl_args)
     _require_obs_key(adata, label_key, "--label-key")
     obs_labels = adata.obs[label_key].unique()
     W, coords, covariates_matrix = get_spatial_from_anndata(adata, layer)
@@ -329,6 +343,7 @@ def differential_sample_programs(
     n_components: Components = 8,
     layer: Layer = None,
     label_key: LabelKey = None,
+    include: Include = None,
     exclude: Exclude = None,
     transform: Transform = None,
     min_counts: MinCounts = 10,
@@ -349,7 +364,7 @@ def differential_sample_programs(
     fnames = fnames_a + fnames_b
     n_a, n_b = len(fnames_a), len(fnames_b)
     idx_a, idx_b = range(n_a), range(n_a, n_a + n_b)
-    exclude_labels = [l.strip() for l in exclude.split(",")] if exclude is not None else None
+    incl_excl_args = _parse_include_exclude(include, exclude)
     pre_args = preprocess_cfg(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
@@ -358,7 +373,7 @@ def differential_sample_programs(
     )
 
     adata_samples, sample_names = load_preprocess_samples(
-        fnames, sample_names, exclude=exclude_labels, verbose=verbose, **pre_args
+        fnames, sample_names, verbose=verbose, **pre_args, **incl_excl_args
     )
     W, coords, covariates_matrix, labels = _get_spatial_inputs_for_samples(
         adata_samples, layer, spot_operator, label_key
@@ -400,6 +415,7 @@ def marker_programs(
     radius: Radius = 150,
     n_components: Components = 8,
     layer: Layer = None,
+    include: Include = None,
     exclude: Exclude = None,
     transform: Transform = None,
     min_counts: MinCounts = 10,
@@ -414,13 +430,13 @@ def marker_programs(
     verbose: Verbose = False,
 ):
     """Marker gene programs that distinguish labelled domains or cell types."""
-    exclude_labels = [l.strip() for l in exclude.split(",")] if exclude is not None else None
+    incl_excl_args = _parse_include_exclude(include, exclude)
     pre_args = preprocess_cfg(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
     model_args = model_cfg(radius, alpha, gene_center)
 
-    adata = load_preprocess_sample(fname, exclude=exclude_labels, verbose=verbose, **pre_args)
+    adata = load_preprocess_sample(fname, verbose=verbose, **pre_args, **incl_excl_args)
     _require_obs_key(adata, label_key, "--label-key")
     W, coords, covariates_matrix = get_spatial_from_anndata(adata, layer)
     labels = adata.obs[label_key]

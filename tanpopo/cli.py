@@ -123,6 +123,13 @@ Labels = Annotated[
         "Omit for whole-sample analysis, use 'all' for every label in --label-key.",
     ),
 ]
+Include = Annotated[
+    str | None,
+    typer.Option(
+        "--include",
+        help="Label(s) to subset data for analysis (comma separated, overrides --exclude).",
+    ),
+]
 Exclude = Annotated[
     str | None,
     typer.Option("--exclude", help="Label(s) to exclude from analysis (comma separated)."),

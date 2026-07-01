@@ -10,12 +10,24 @@ from tanpopo.kernel import kernel_matrix_sparse
 from tanpopo.utils import as_list, get_counts_matrix, pd_dtype
 
 
-def filter_anndata(adata, min_counts=10, min_spot_fraction=0.01, exclude=None, label_key=None):
-    if exclude is not None:
-        if label_key not in adata.obs:
-            raise ValueError("Valid `label_key` must be provided when using `exclude` labels.")
-        exclude = np.array(exclude, pd_dtype(adata.obs[label_key]))
-        adata._inplace_subset_obs(~adata.obs[label_key].isin(exclude))
+def subset_by_labels(adata, label_key, labels, mode):
+    if label_key not in adata.obs:
+        raise ValueError(f"Valid `label_key` must be provided when using `{mode}` labels.")
+    labels = np.array(labels, pd_dtype(adata.obs[label_key]))
+    subset = adata.obs[label_key].isin(labels)
+    if mode == "exclude":
+        subset = ~subset
+    adata._inplace_subset_obs(subset)
+
+
+def filter_anndata(
+    adata, min_counts=10, min_spot_fraction=0.01, include=None, exclude=None, label_key=None
+):
+    if include is not None:
+        subset_by_labels(adata, label_key, include, mode="include")
+    elif exclude is not None:
+        subset_by_labels(adata, label_key, exclude, mode="exclude")
+
     if min_counts:
         sc.pp.filter_genes(adata, min_counts=min_counts)
     if min_spot_fraction:
@@ -39,6 +51,7 @@ def preprocess_anndata(
     min_counts=10,
     min_spot_fraction=0.01,
     covariates=None,
+    include=None,
     exclude=None,
     label_key=None,
     layer=None,
@@ -46,7 +59,7 @@ def preprocess_anndata(
     """
     Filter genes, compute covariates and transform anndata
     """
-    filter_anndata(adata, min_counts, min_spot_fraction, exclude, label_key)
+    filter_anndata(adata, min_counts, min_spot_fraction, include, exclude, label_key)
     if covariates:
         compute_covariates(adata, covariates, layer)
     transform_anndata(adata, target_sum, transform)
@@ -59,6 +72,7 @@ def preprocess_anndata_shared_genes(
     min_counts=10,
     min_spot_fraction=0.01,
     covariates=None,
+    include=None,
     exclude=None,
     label_key=None,
     layer=None,
@@ -69,7 +83,7 @@ def preprocess_anndata_shared_genes(
     """
     genes = set(adata_list[0].var_names)
     for adata in adata_list:
-        filter_anndata(adata, min_counts, min_spot_fraction, exclude, label_key)
+        filter_anndata(adata, min_counts, min_spot_fraction, include, exclude, label_key)
         genes &= set(adata.var_names)
 
     genes = [gene for gene in adata_list[0].var_names if gene in genes]
