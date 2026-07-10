@@ -116,6 +116,19 @@ def _get_spatial_inputs_for_samples(adata_samples, layer, spot_operator, label_k
     return W, coords, covariates_matrix, labels
 
 
+def _subset_input(adata, label_key, label, subset_labels, soft_mask):
+    if not subset_labels:
+        return adata, slice(None), None, ""
+
+    output_mask = (adata.obs[label_key] == label).to_numpy()
+    key = f"_{str(label).replace(' ', '_')}"
+
+    if soft_mask:
+        return adata, output_mask, output_mask, key
+
+    return adata[output_mask], output_mask, None, key
+
+
 app = typer.Typer(
     name="tanpopo",
     help="Spatial gene eigenmode workflows for spatial transcriptomics.",
@@ -134,6 +147,7 @@ def spatial_programs(
     layer: Layer = None,
     label_key: LabelKey = None,
     subset_labels: Labels = None,
+    soft_mask: MaskType = False,
     include: Include = None,
     exclude: Exclude = None,
     transform: Transform = None,
@@ -156,22 +170,27 @@ def spatial_programs(
     )
     model_args = model_cfg(radius, alpha, gene_center, spot_operator)
 
+    requires_mask = subset_labels is not None
+    soft_mask = False if not requires_mask else soft_mask
+
     adata = load_preprocess_sample(fname, verbose=verbose, **pre_args, **incl_excl_args)
-    if subset_labels is not None or spot_operator == "label":
+    if requires_mask or spot_operator == "label":
         _require_obs_key(adata, label_key, "--label-key")
     obs_labels = _parse_labels(adata, subset_labels, label_key)
-    labels = adata.obs[label_key] if spot_operator == "label" and subset_labels is None else None
+    labels = adata.obs[label_key] if spot_operator == "label" and not requires_mask else None
 
     model = SpatialGeneKPCA(block_size=block_size, dtype=dtype, verbose=verbose, **model_args)
-    add_metadata(adata, cmd_id, pre_args, model_args)
+
+    extra = {"soft_mask": soft_mask} if requires_mask else None
+    add_metadata(adata, cmd_id, pre_args, model_args, extra)
 
     for label in obs_labels:
-        mask = (adata.obs[label_key] == label).to_numpy() if subset_labels else slice(None)
+        mask = (adata.obs[label_key] == label).to_numpy() if subset_labels else None
         key = f"_{str(label).replace(' ', '_')}" if subset_labels else ""
 
-        W, coords, covariates_matrix = get_spatial_from_anndata(adata[mask], layer)
-        model.fit(W, coords, n_components, labels, covariates_matrix)
-        store_sample_result(adata, model, cmd_id, key, mask)
+        W, coords, covariates_matrix = get_spatial_from_anndata(adata, layer)
+        model.fit(W, coords, n_components, labels, covariates_matrix, mask, soft_mask)
+        store_sample_result(adata, model, cmd_id, key, model.samples[0].obs_idx)
 
         if verbose:
             if subset_labels:
@@ -179,7 +198,7 @@ def spatial_programs(
             print_top_genes_per_basis(model.eigenvectors, model.eigenvalues, adata.var_names)
         if plot:
             size = 120000 / adata.n_obs
-            plot_spatial_modes(adata[mask], model.spot_modes[0], size=size)
+            plot_spatial_modes(adata[model.samples[0].obs_idx], model.spot_modes[0], size=size)
 
     if output:
         adata.write(output)

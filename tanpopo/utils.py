@@ -69,6 +69,11 @@ def as_list(x):
     return list(x) if isinstance(x, (list, tuple)) else [x]
 
 
+def none_to_list(value, n):
+    """If value is None return list of n None values"""
+    return [None] * n if value is None else as_list(value)
+
+
 def as_value(x):
     """Enum to value"""
     return x.value if x is not None else None

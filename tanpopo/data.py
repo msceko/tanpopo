@@ -7,7 +7,7 @@ import scipy.sparse as sp
 
 from tanpopo.covariates import compute_covariates
 from tanpopo.kernel import kernel_matrix_sparse
-from tanpopo.utils import as_list, get_counts_matrix, pd_dtype
+from tanpopo.utils import as_list, none_to_list, get_counts_matrix, pd_dtype
 
 
 def subset_by_labels(adata, label_key, labels, mode):
@@ -142,6 +142,7 @@ class SampleData:
     W: sp.csr_matrix
     K: sp.csr_matrix
     inv_order: np.ndarray
+    obs_idx: np.ndarray
     labels_groups: Groups
     covariates: np.ndarray | None = None
 
@@ -158,44 +159,72 @@ class SampleData:
         return self.W.tocsc(copy=False)
 
 
-def prepare_sample(W, coords, radius, labels=None, covariates=None, dtype=np.float64):
+def prepare_sample(
+    W, coords, radius, labels=None, covariates=None, mask=None, soft_mask=False, dtype=np.float64
+):
     """
     Reorder one sample by labels, build its sparse kernel, and keep inverse order.
     """
     n = W.shape[0]
 
-    if labels is None:
-        order = np.arange(n, dtype=np.int64)
-        groups = Groups.single(n)
+    if mask is None:
+        mask = np.ones(n, dtype=bool)
+        soft_mask = False
     else:
-        order, groups = Groups.from_labels(labels)
+        mask = np.asarray(mask, dtype=bool)
+        if mask.shape != (n,):
+            raise ValueError("mask must have shape (n_spots,).")
+        if not np.any(mask):
+            raise ValueError("mask must select at least one spot.")
 
-    inv = np.empty(n, dtype=np.int64)
-    inv[order] = np.arange(n, dtype=np.int64)
+    if soft_mask:
+        # centres = masked spots, contributors = spots reached by those centres
+        K_center = kernel_matrix_sparse(coords[mask], radius, coords, dtype)
+        spot_idx = np.unique(K_center.indices)
+    else:
+        spot_idx = np.flatnonzero(mask)
 
-    W = sp.csr_matrix(W[order], dtype=dtype)
-    coords = np.asarray(coords, dtype=dtype)[order]
+    if labels is None:
+        order = np.arange(spot_idx.size, dtype=np.int64)
+        groups = Groups.single(spot_idx.size)
+    else:
+        order, groups = Groups.from_labels(np.asarray(labels)[spot_idx])
+
+    idx = spot_idx[order]
+    inv = np.empty(order.size, dtype=np.int64)
+    inv[order] = np.arange(order.size, dtype=np.int64)
+
+    W = sp.csr_matrix(W[idx], dtype=dtype)
+    coords_spots = coords[idx]
 
     if covariates is not None:
-        covariates = np.asarray(covariates, dtype=dtype)
+        covariates = np.asarray(covariates, dtype=dtype)[idx]
         if covariates.ndim == 1:
             covariates = covariates[:, None]
-        covariates = covariates[order]
 
-    K = kernel_matrix_sparse(coords, radius).astype(dtype)
+    if soft_mask:
+        K_center = K_center[:, idx]
+        K = K_center.T @ K_center
+        K.sum_duplicates()
+        K.eliminate_zeros()
+    else:
+        K = kernel_matrix_sparse(coords_spots, radius, dtype=dtype)
 
-    return SampleData(W=W, K=K, inv_order=inv, labels_groups=groups, covariates=covariates)
+    return SampleData(W, K, inv, spot_idx, groups, covariates)
 
 
-def prepare_samples(W, coords, radius, labels=None, covariates=None, dtype=np.float64):
+def prepare_samples(
+    W, coords, radius, labels=None, covariates=None, masks=None, soft_mask=False, dtype=np.float64
+):
     W = as_list(W)
     coords = as_list(coords)
-    labels = [None] * len(W) if labels is None else as_list(labels)
-    covariates = [None] * len(W) if covariates is None else as_list(covariates)
+    labels = none_to_list(labels, len(W))
+    covariates = none_to_list(covariates, len(W))
+    masks = none_to_list(masks, len(W))
 
     return [
-        prepare_sample(w, xy, radius, lab, cov, dtype=dtype)
-        for w, xy, lab, cov in zip(W, coords, labels, covariates)
+        prepare_sample(w, xy, radius, lab, cov, mask, soft_mask, dtype)
+        for w, xy, lab, cov, mask in zip(W, coords, labels, covariates, masks)
     ]
 
 

@@ -199,6 +199,17 @@ SampleNormaliseBy = Annotated[
         help="Gene scaling reference for sample-wise models.",
     ),
 ]
+MaskType = Annotated[
+    bool,
+    typer.Option(
+        "--soft-mask/--hard-mask",
+        help=(
+            "With --labels, use selected-label spots as kernel centers while "
+            "allowing kernels to include spots from any label. "
+            "Hard masking restricts both centres and neighbours."
+        ),
+    ),
+]
 BlockSize = Annotated[
     int | None,
     typer.Option(

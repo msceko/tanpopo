@@ -90,9 +90,22 @@ class KPCAModel:
 
         return self
 
-    def fit(self, W, coords, n_components, labels=None, covariates=None, tol=0, maxiter=None):
+    def fit(
+        self,
+        W,
+        coords,
+        n_components,
+        labels=None,
+        covariates=None,
+        masks=None,
+        soft_mask=False,
+        tol=0,
+        maxiter=None,
+    ):
         with timed("Preparing samples", self.verbose):
-            self.samples = prepare_samples(W, coords, self.radius, labels, covariates, self.dtype)
+            self.samples = prepare_samples(
+                W, coords, self.radius, labels, covariates, masks, soft_mask, self.dtype
+            )
 
         with timed("Building operator", self.verbose):
             G, lifter = self._build_operator(self.samples)
