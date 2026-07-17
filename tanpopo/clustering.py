@@ -20,7 +20,15 @@ def cluster_leiden(X, n_neighbors=15, resolution=1.0, metric="cosine", random_st
         metric=metric,
         random_state=random_state,
     )
-    sc.tl.leiden(adata, resolution=resolution, random_state=random_state, key_added="leiden")
+    sc.tl.leiden(
+        adata,
+        resolution=resolution,
+        random_state=random_state,
+        key_added="leiden",
+        flavor="igraph",
+        n_iterations=2,
+        directed=False,
+    )
     labels = adata.obs["leiden"].astype(int).to_numpy()
     return pd.Categorical(labels, ordered=True)
 
