@@ -30,6 +30,13 @@ def _check_radius(D, radius, threshold=0.5):
         )
 
 
+def neighbour_spacing(coords):
+    """Calculate average nearest neighbour distance"""
+    tree = cKDTree(coords)
+    distances, _ = tree.query(coords, k=2)
+    return np.mean(distances[:, 1])
+
+
 def wendland_c2(r):
     """
     Wendland C^2 (compactly supported, PSD in R^d for d <= 3):

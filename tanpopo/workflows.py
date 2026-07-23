@@ -1,9 +1,9 @@
+import anndata as ad
 import numpy as np
 import pandas as pd
 import scanpy as sc
 import matplotlib.pyplot as plt
 import typer
-from sklearn.neighbors import NearestNeighbors
 
 from tanpopo.io import (
     load_preprocess_sample,
@@ -26,8 +26,11 @@ from tanpopo.models import (
 from tanpopo.clustering import cluster_genes, cluster_spots
 from tanpopo.plot import plot_spatial_modes, plot_labels, plot_labels_to_reference
 from tanpopo.utils import argtop, pd_dtype, timed
-from tanpopo.analysis import compare_component_spaces, print_top_genes_per_basis
+from tanpopo.analysis import compare_component_spaces, print_top_genes_per_basis, label_metrics
+from tanpopo.kernel import neighbour_spacing
 from tanpopo.cli import *
+
+ad.settings.allow_write_nullable_strings = True
 
 
 def _require_gseapy():
@@ -57,6 +60,13 @@ def _require_obs_key(adata, key, option):
 def _require_multi_input(fnames, cmd):
     if len(fnames) < 2:
         raise typer.BadParameter(f"{cmd} requires at least two --input files.")
+
+
+def _require_two_inputs(fnames, cmd_ids, cmd):
+    if len(fnames) != 2:
+        raise typer.BadParameter(f"{cmd} requires exactly two --input files.")
+    if len(cmd_ids) != 2:
+        raise typer.BadParameter(f"{cmd} requires exactly two --input files.")
 
 
 def _parse_comma_separated_args(args):
@@ -129,6 +139,13 @@ def _subset_input(adata, label_key, label, subset_labels, soft_mask):
     return adata[output_mask], output_mask, None, key
 
 
+def _auto_radius(adata):
+    avg_dist = neighbour_spacing(adata.obsm["spatial"])
+    radius = 2.5 * avg_dist
+    print(f"No --radius specified, using --radius={radius:.2f} (avg spot spacing: {avg_dist:.2f})")
+    return radius
+
+
 app = typer.Typer(
     name="tanpopo",
     help="Spatial gene eigenmode workflows for spatial transcriptomics.",
@@ -142,7 +159,7 @@ def spatial_programs(
     fname: InputPath,
     output: OutputPath = None,
     cmd_id: ExperimentId = "spatial",
-    radius: Radius = 150,
+    radius: Radius = None,
     n_components: Components = 8,
     layer: Layer = None,
     label_key: LabelKey = None,
@@ -168,17 +185,18 @@ def spatial_programs(
     pre_args = preprocess_cfg(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
-    model_args = model_cfg(radius, alpha, gene_center, spot_operator)
 
     requires_mask = subset_labels is not None
     soft_mask = False if not requires_mask else soft_mask
 
     adata = load_preprocess_sample(fname, verbose=verbose, **pre_args, **incl_excl_args)
+    radius = _auto_radius(adata) if radius is None else radius
     if requires_mask or spot_operator == "label":
         _require_obs_key(adata, label_key, "--label-key")
     obs_labels = _parse_labels(adata, subset_labels, label_key)
     labels = adata.obs[label_key] if spot_operator == "label" and not requires_mask else None
 
+    model_args = model_cfg(radius, alpha, gene_center, spot_operator)
     model = SpatialGeneKPCA(block_size=block_size, dtype=dtype, verbose=verbose, **model_args)
 
     extra = {"soft_mask": soft_mask} if requires_mask else None
@@ -212,7 +230,7 @@ def shared_programs(
     fnames: InputPaths,
     output: OutputPath = None,
     cmd_id: ExperimentId = "shared",
-    radius: Radius = 150,
+    radius: Radius = None,
     sample_names: SampleNames = None,
     n_components: Components = 8,
     layer: Layer = None,
@@ -240,22 +258,24 @@ def shared_programs(
     pre_args = preprocess_cfg(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
-    model_args = model_cfg(
-        radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
-    )
 
     adata_samples, sample_names = load_preprocess_samples(
         fnames, sample_names, verbose=verbose, **pre_args, **incl_excl_args
     )
+    radius = _auto_radius(adata_samples[0]) if radius is None else radius
     if spot_operator == "label":
         _require_obs_key(adata_samples, label_key, "--label-key")
     W, coords, covariates_matrix, labels = _get_spatial_inputs_for_samples(
         adata_samples, layer, spot_operator, label_key
     )
 
+    model_args = model_cfg(
+        radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
+    )
     model = SpatialGeneSampleCombinedKPCA(
         block_size=block_size, dtype=dtype, verbose=verbose, **model_args
     ).fit(W, coords, n_components, labels, covariates_matrix)
+
     adata_samples = store_multi_sample_result(adata_samples, sample_names, model, cmd_id, plot)
     extra = {"sample_names": sample_names, "sample_coefficients": model.sample_coefficients_}
     add_metadata(adata_samples, cmd_id, pre_args, model_args, extra)
@@ -275,7 +295,7 @@ def differential_label_programs(
     label_key: LabelKey,
     output: OutputPath = None,
     cmd_id: ExperimentId = "differential_label",
-    radius: Radius = 150,
+    radius: Radius = None,
     n_components: Components = 8,
     layer: Layer = None,
     include: Include = None,
@@ -300,15 +320,16 @@ def differential_label_programs(
     pre_args = preprocess_cfg(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
-    model_args = model_cfg(
-        radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
-    )
 
     adata = load_preprocess_sample(fname, verbose=verbose, **pre_args, **incl_excl_args)
+    radius = _auto_radius(adata) if radius is None else radius
     _require_obs_key(adata, label_key, "--label-key")
     obs_labels = adata.obs[label_key].unique()
     W, coords, covariates_matrix = get_spatial_from_anndata(adata, layer)
 
+    model_args = model_cfg(
+        radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
+    )
     model = SpatialGeneSampleContrastKPCA(
         positive_samples=[0],
         negative_samples=[1],
@@ -357,7 +378,7 @@ def differential_sample_programs(
     fnames_b: InputPathsB,
     output: OutputPath = None,
     cmd_id: ExperimentId = "differential_sample",
-    radius: Radius = 150,
+    radius: Radius = None,
     sample_names: SampleNames = None,
     n_components: Components = 8,
     layer: Layer = None,
@@ -387,17 +408,18 @@ def differential_sample_programs(
     pre_args = preprocess_cfg(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
-    model_args = model_cfg(
-        radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
-    )
 
     adata_samples, sample_names = load_preprocess_samples(
         fnames, sample_names, verbose=verbose, **pre_args, **incl_excl_args
     )
+    radius = _auto_radius(adata_samples[0]) if radius is None else radius
     W, coords, covariates_matrix, labels = _get_spatial_inputs_for_samples(
         adata_samples, layer, spot_operator, label_key
     )
 
+    model_args = model_cfg(
+        radius, alpha, gene_center, spot_operator, sample_weighting, normalise_by
+    )
     model = SpatialGeneSampleContrastKPCA(
         positive_samples=idx_a,
         negative_samples=idx_b,
@@ -431,7 +453,7 @@ def marker_programs(
     label_key: LabelKey,
     output: OutputPath = None,
     cmd_id: ExperimentId = "marker",
-    radius: Radius = 150,
+    radius: Radius = None,
     n_components: Components = 8,
     layer: Layer = None,
     include: Include = None,
@@ -453,16 +475,18 @@ def marker_programs(
     pre_args = preprocess_cfg(
         target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
     )
-    model_args = model_cfg(radius, alpha, gene_center)
 
     adata = load_preprocess_sample(fname, verbose=verbose, **pre_args, **incl_excl_args)
+    radius = _auto_radius(adata) if radius is None else radius
     _require_obs_key(adata, label_key, "--label-key")
     W, coords, covariates_matrix = get_spatial_from_anndata(adata, layer)
     labels = adata.obs[label_key]
 
+    model_args = model_cfg(radius, alpha, gene_center)
     model = SpatialGeneContrastKPCA.between_labels(
         block_size=block_size, dtype=dtype, verbose=verbose, **model_args
     ).fit(W, coords, n_components, labels, covariates_matrix)
+
     add_metadata(adata, cmd_id, pre_args, model_args)
     store_sample_result(adata, model, cmd_id)
 
@@ -481,11 +505,13 @@ def gene_scores(
     fname: InputPath,
     output: OutputPath = None,
     cmd_id: ExperimentId = "spatial",
-    radius: Radius = 150,
+    radius: Radius = None,
     n_components: Components = 8,
     layer: Layer = None,
     label_key: LabelKey = None,
     subset_labels: Labels = None,
+    soft_mask: MaskType = False,
+    include: Include = None,
     exclude: Exclude = None,
     transform: Transform = None,
     min_counts: MinCounts = 10,
@@ -509,6 +535,8 @@ def gene_scores(
         layer,
         label_key,
         subset_labels,
+        soft_mask,
+        include,
         exclude,
         transform,
         min_counts,
@@ -535,13 +563,6 @@ def gene_scores(
                 print(f"{gene_name:15s} {gene_score:.2f}")
 
     return adata
-
-
-def _require_two_inputs(fnames, cmd_ids, cmd):
-    if len(fnames) != 2:
-        raise typer.BadParameter(f"{cmd} requires exactly two --input files.")
-    if len(cmd_ids) != 2:
-        raise typer.BadParameter(f"{cmd} requires exactly two --input files.")
 
 
 @app.command(no_args_is_help=True)
@@ -647,19 +668,7 @@ def gsea(
 
 
 @app.command(no_args_is_help=True)
-def estimate_spacing(fname: InputPath):
-    """Compute average distance to closest neighbour."""
-    with timed("Loading data", enabled=True):
-        adata = sc.read_h5ad(fname)
-    nn = NearestNeighbors(n_neighbors=2, metric="euclidean")
-    nn.fit(adata.obsm["spatial"])
-    distances, _ = nn.kneighbors(adata.obsm["spatial"])
-    avg_dist = np.mean(distances[:, 1])
-    print(f"Average neighbour distance = {avg_dist:.2f}")
-
-
-@app.command(no_args_is_help=True)
-def h5ad_summary(fname: InputPath):
+def inspect(fname: InputPath, calculate_spacing: CalculateSpacing = False):
     """View all anndata annotations."""
     with timed("Loading data", enabled=True):
         adata = sc.read_h5ad(fname)
@@ -670,6 +679,10 @@ def h5ad_summary(fname: InputPath):
             # for key, val in adata.uns["tanpopo"].items():
             #     print(f"    uns['tanpopo']['{key}']: ", val)
 
+    if calculate_spacing:
+        avg_dist = neighbour_spacing(adata.obsm["spatial"])
+        print(f"Average neighbour distance = {avg_dist:.2f}")
+
 
 @app.command(no_args_is_help=True)
 def cluster(
@@ -677,6 +690,7 @@ def cluster(
     by: ClusterBy,
     output: OutputPath = None,
     cmd_id: ExperimentId = "spatial",
+    key_added: ClusterId = None,
     neighbours: Neighbours = 15,
     resolution: Resolution = 1.0,
     metric: Metric = "cosine",
@@ -705,7 +719,7 @@ def cluster(
         "metric": metric,
     }
 
-    key_added = f"tanpopo_{cmd_id}_leiden"
+    key_added = f"tanpopo_{cmd_id}_leiden" if key_added is None else key_added
     if by == "spots":
         key = f"tanpopo_{cmd_id}_spot_modes"
         cluster_spots(adata, neighbours, resolution, metric, key, key_added, plot, umap, verbose)
@@ -739,6 +753,14 @@ def plot(
 
         if reference_key is not None:
             _require_obs_key(adata, reference_key, "--reference-key")
+            if verbose:
+                ari, nmi, ami, hom = label_metrics(
+                    adata.obs[reference_key].astype(str), adata.obs[label_key].astype(str)
+                )
+                print(f"Adjusted Rand Index: {ari:.6f}")
+                print(f"Normalised Mutual Information: {nmi:.6f}")
+                print(f"Adjusted Mutual Information: {ami:.6f}")
+                print(f"Homogeneity Score: {hom:.6f}")
             plot_labels_to_reference(adata, label_key, reference_key)
         else:
             plot_labels(adata, label_key)

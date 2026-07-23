@@ -146,6 +146,7 @@ def plot_labels(adata, key, **kwargs):
     axs = sc.pl.embedding(adata, **embedding_args)
     axs = make_iterable(axs)
     for ax in axs:
+        ax.legend(bbox_to_anchor=(0.9, 1), loc="upper left")
         ax.invert_yaxis()
         ax.axis("equal")
 

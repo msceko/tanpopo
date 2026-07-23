@@ -1,6 +1,12 @@
 import numpy as np
 import pandas as pd
 import typer
+from sklearn.metrics import (
+    adjusted_mutual_info_score,
+    adjusted_rand_score,
+    homogeneity_score,
+    normalized_mutual_info_score,
+)
 
 from tanpopo.utils import argtop
 
@@ -127,6 +133,14 @@ def choose_k(eigvals, method="auto", energy=0.9, k_max=50):
         return k_l
     # auto: take the more conservative (smaller) but at least 2
     return int(max(2, min(k_e, k_l, eigvals.size)))
+
+
+def label_metrics(labels_true, labels_pred):
+    ari = adjusted_rand_score(labels_true, labels_pred)
+    nmi = normalized_mutual_info_score(labels_true, labels_pred)
+    ami = adjusted_mutual_info_score(labels_true, labels_pred)
+    hom = homogeneity_score(labels_true, labels_pred)
+    return ari, nmi, ami, hom
 
 
 def top_scored_genes(scores, genes, n_top, mode="pos"):

@@ -173,7 +173,7 @@ Components = Annotated[
     typer.Option("--components", "-k", help="Number of spatial components."),
 ]
 Radius = Annotated[
-    float,
+    float | None,
     typer.Option("--radius", "-r", help="Wendland kernel support radius."),
 ]
 Alpha = Annotated[
@@ -300,6 +300,10 @@ Umap = Annotated[
     bool,
     typer.Option("--umap", help="Compute and plot UMAP."),
 ]
+ClusterId = Annotated[
+    str | None,
+    typer.Option("--cluster-id", help="Clustering ID used to namespace clustering outputs."),
+]
 
 # ------------------------------------------------------------------------------
 # Misc
@@ -338,4 +342,8 @@ Modes = Annotated[
 Verbose = Annotated[
     bool,
     typer.Option("--verbose", help="Print timing information."),
+]
+CalculateSpacing = Annotated[
+    bool,
+    typer.Option("--calculate-spacing", help="Compute average distance to closest neighbour."),
 ]
