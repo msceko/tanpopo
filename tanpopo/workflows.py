@@ -4,6 +4,7 @@ import pandas as pd
 import scanpy as sc
 import matplotlib.pyplot as plt
 import typer
+from pathlib import Path
 
 from tanpopo.io import (
     load_preprocess_sample,
@@ -141,7 +142,7 @@ def _subset_input(adata, label_key, label, subset_labels, soft_mask):
 
 def _auto_radius(adata):
     avg_dist = neighbour_spacing(adata.obsm["spatial"])
-    radius = 2.5 * avg_dist
+    radius = 3.5 * avg_dist
     print(f"No --radius specified, using --radius={radius:.2f} (avg spot spacing: {avg_dist:.2f})")
     return radius
 
@@ -630,6 +631,7 @@ def compare_spot_modes(
 @app.command(no_args_is_help=True)
 def gsea(
     fname: InputPath,
+    output: OutputCSVPath = None,
     cmd_id: ExperimentId = "spatial",
     modes: Modes = None,
     verbose: Verbose = False,
@@ -646,6 +648,7 @@ def gsea(
     idx = _parse_slice(modes, "--modes")
     df = pd.DataFrame(adata.varm[f"tanpopo_{cmd_id}_eigenvectors"], adata.var_names)
 
+    results = []
     for mode in df.columns[idx]:
         rnk = df[mode]
         rnk = rnk.dropna().groupby(level=0).mean().sort_values(ascending=False)
@@ -654,7 +657,7 @@ def gsea(
         pre_res = gp.prerank(
             rnk=rnk,
             gene_sets="MSigDB_Hallmark_2020",
-            min_size=15,
+            min_size=8,
             max_size=500,
             permutation_num=1000,
             outdir=None,
@@ -662,9 +665,19 @@ def gsea(
             verbose=True,
         )
 
-        results = pre_res.res2d
-        print(f"Mode {mode}")
-        print(results)
+        result = pre_res.res2d
+        if verbose:
+            print(f"Mode {mode}")
+            print(result)
+
+        if output is not None:
+            result.insert(0, "mode", mode)
+            results.append(result)
+
+    if output is not None:
+        pd.concat(results, ignore_index=True).to_csv(output, index=False)
+        if verbose:
+            print(f"Saved results to {output}")
 
 
 @app.command(no_args_is_help=True)
@@ -742,7 +755,7 @@ def plot(
     verbose: Verbose = False,
 ):
     """Plot spatial gene programs or spot labels."""
-    with timed("Loading data", verbose):
+    with timed("loading data", verbose):
         adata = sc.read_h5ad(fname)
     if verbose:
         print(adata)
@@ -779,6 +792,23 @@ def plot(
         plt.savefig(output, bbox_inches="tight")
     if show:
         plt.show()
+
+
+@app.command(no_args_is_help=True)
+def export_modes(fname: InputPath, output: OutputCSVPath = None, cmd_id: ExperimentId = "spatial"):
+    """Export spatial modes from .h5ad to .csv."""
+    adata = sc.read_h5ad(fname)
+    sample_name = Path(fname).stem
+    columns = [
+        f"Mode {k} (λ = {v:.6e})"
+        for k, v in enumerate(adata.uns["tanpopo"][cmd_id]["eigenvalues"])
+    ]
+    df = pd.DataFrame(
+        adata.varm[f"tanpopo_{cmd_id}_eigenvectors"],
+        columns=columns,
+        index=adata.var_names,
+    ).reset_index(names=f"{sample_name} gene")
+    df.to_csv(output, index=False)
 
 
 def main():

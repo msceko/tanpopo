@@ -90,6 +90,16 @@ OutputPath = Annotated[
         writable=True,
     ),
 ]
+OutputCSVPath = Annotated[
+    Path | None,
+    typer.Option(
+        "--output",
+        "-o",
+        help="Optional output .csv file.",
+        dir_okay=False,
+        writable=True,
+    ),
+]
 OutputImagePath = Annotated[
     Path | None,
     typer.Option(
