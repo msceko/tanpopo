@@ -2,160 +2,17 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Callable, TypeVar
+from typing import Annotated
 
 import typer
 
-E = TypeVar("E", bound=Enum)
+
+class ObjectiveTypes(str, Enum):
+    covariance = "covariance"
+    gene_standardized = "gene_standardized"
+    gain = "gain"
 
 
-def comma_separated_enum(enum_cls: type[E]) -> Callable[[str | None], list[E] | None]:
-    valid = {item.value: item for item in enum_cls}
-    choices = ", ".join(str(item.value) for item in enum_cls)
-
-    def parser(value: str | None) -> list[E] | None:
-        if value is None:
-            return None
-
-        raw_values = [item.strip() for item in value.split(",")]
-
-        if any(item == "" for item in raw_values):
-            raise typer.BadParameter(f"Empty values are not allowed. Choices: {choices}")
-
-        invalid = [item for item in raw_values if item not in valid]
-        if invalid:
-            raise typer.BadParameter(
-                f"Invalid value(s): {', '.join(invalid)}. " f"Choose from: {choices}"
-            )
-
-        return [valid[item].value for item in raw_values]
-
-    return parser
-
-
-# ------------------------------------------------------------------------------
-# IO
-# ------------------------------------------------------------------------------
-InputPath = Annotated[
-    Path,
-    typer.Option(
-        "--input",
-        "-i",
-        help="Input .h5ad file.",
-        exists=True,
-        dir_okay=False,
-        readable=True,
-    ),
-]
-InputPaths = Annotated[
-    list[Path],
-    typer.Option(
-        "--input",
-        "-i",
-        help="Input .h5ad file. Supply once per sample.",
-        exists=True,
-        dir_okay=False,
-        readable=True,
-    ),
-]
-InputPathsA = Annotated[
-    list[Path],
-    typer.Option(
-        "--input-a",
-        "-ia",
-        help="Input .h5ad file for group A. Can be specified multiple times.",
-        exists=True,
-        dir_okay=False,
-        readable=True,
-    ),
-]
-InputPathsB = Annotated[
-    list[Path],
-    typer.Option(
-        "--input-b",
-        "-ib",
-        help="Input .h5ad file for group B. Can be specified multiple times.",
-        exists=True,
-        dir_okay=False,
-        readable=True,
-    ),
-]
-OutputPath = Annotated[
-    Path | None,
-    typer.Option(
-        "--output",
-        "-o",
-        help="Optional output .h5ad file.",
-        dir_okay=False,
-        writable=True,
-    ),
-]
-OutputCSVPath = Annotated[
-    Path | None,
-    typer.Option(
-        "--output",
-        "-o",
-        help="Optional output .csv file.",
-        dir_okay=False,
-        writable=True,
-    ),
-]
-OutputImagePath = Annotated[
-    Path | None,
-    typer.Option(
-        "--output",
-        "-o",
-        help="Save plot to image file.",
-        dir_okay=False,
-        writable=True,
-    ),
-]
-Layer = Annotated[
-    str | None,
-    typer.Option("--layer", help="AnnData layer to use instead of X."),
-]
-LabelKey = Annotated[
-    str | None,
-    typer.Option("--label-key", help="obs column defining labels/cell types."),
-]
-ReferenceKey = Annotated[
-    str | None,
-    typer.Option(
-        "--reference-key",
-        help="obs column containing reference labels to compare with --label-key.",
-    ),
-]
-Labels = Annotated[
-    str | None,
-    typer.Option(
-        "--labels",
-        help="Subset spatial programs to label(s) (comma separated). "
-        "Omit for whole-sample analysis, use 'all' for every label in --label-key.",
-    ),
-]
-Include = Annotated[
-    str | None,
-    typer.Option(
-        "--include",
-        help="Label(s) to subset data for analysis (comma separated, overrides --exclude).",
-    ),
-]
-Exclude = Annotated[
-    str | None,
-    typer.Option("--exclude", help="Label(s) to exclude from analysis (comma separated)."),
-]
-SampleNames = Annotated[
-    list[str] | None,
-    typer.Option(
-        "--name",
-        help="Name for each --input, in the same order. Defaults to input file stems.",
-    ),
-]
-
-
-# ------------------------------------------------------------------------------
-# Model
-# ------------------------------------------------------------------------------
 class SpotOperatorTypes(str, Enum):
     none = "none"
     sample = "sample"
@@ -165,12 +22,16 @@ class SpotOperatorTypes(str, Enum):
 class SampleWeightingTypes(str, Enum):
     none = "none"
     n_spots = "n_spots"
-    trace = "trace"
 
 
-class SampleNormaliseTypes(str, Enum):
-    sample = "sample"
-    pooled = "pooled"
+class GraphNormalisationTypes(str, Enum):
+    symmetric = "symmetric"
+    none = "none"
+
+
+class TransformTypes(str, Enum):
+    sqrt = "sqrt"
+    log1p = "log1p"
 
 
 class Dtypes(str, Enum):
@@ -178,182 +39,98 @@ class Dtypes(str, Enum):
     float64 = "float64"
 
 
-Components = Annotated[
-    int | None,
-    typer.Option("--components", "-k", help="Number of spatial components."),
+InputPath = Annotated[
+    Path,
+    typer.Option("--input", "-i", exists=True, dir_okay=False, readable=True),
 ]
-Radius = Annotated[
-    float | None,
-    typer.Option("--radius", "-r", help="Wendland kernel support radius."),
+InputPaths = Annotated[
+    list[Path],
+    typer.Option("--input", "-i", exists=True, dir_okay=False, readable=True),
 ]
-Alpha = Annotated[
+InputPathsA = Annotated[
+    list[Path],
+    typer.Option("--input-a", "-ia", exists=True, dir_okay=False, readable=True),
+]
+InputPathsB = Annotated[
+    list[Path],
+    typer.Option("--input-b", "-ib", exists=True, dir_okay=False, readable=True),
+]
+OutputPath = Annotated[Path | None, typer.Option("--output", "-o", dir_okay=False)]
+Layer = Annotated[str | None, typer.Option("--layer", help="AnnData layer to analyse instead of X.")]
+LabelKey = Annotated[str | None, typer.Option("--label-key", help="obs column defining cell types.")]
+Labels = Annotated[
+    str | None,
+    typer.Option(
+        "--labels",
+        help="Cell type(s) to analyse, comma separated. 'all' analyses each label separately.",
+    ),
+]
+TargetLabels = Annotated[str, typer.Option("--target-labels", help="Target cell label(s), comma separated.")]
+NeighbourLabels = Annotated[
+    str, typer.Option("--neighbour-labels", help="Neighbour cell label(s), comma separated.")
+]
+SampleNames = Annotated[list[str] | None, typer.Option("--name", help="Name for each input sample.")]
+ExperimentId = Annotated[
+    str,
+    typer.Option("--experiment-id", "--cmd-id", "-id", help="Namespace for Tanpopo outputs."),
+]
+Radius = Annotated[float | None, typer.Option("--radius", "-r", help="Wendland support radius.")]
+Components = Annotated[int, typer.Option("--components", "-k", help="Number of programs.")]
+Objective = Annotated[
+    ObjectiveTypes,
+    typer.Option(
+        "--objective",
+        help="Spatial objective: covariance, gene_standardized, or gain.",
+    ),
+]
+ExpressionRank = Annotated[
+    int,
+    typer.Option(
+        "--expression-rank",
+        help="Expression subspace rank used by objective=gain.",
+    ),
+]
+GainRidge = Annotated[
     float,
-    typer.Option("--alpha", help="Gene magnitude scaling exponent."),
+    typer.Option("--gain-ridge", help="Ridge added to the expression metric for gain."),
+]
+GraphNormalisation = Annotated[
+    GraphNormalisationTypes,
+    typer.Option("--graph-normalisation", help="Spatial graph degree normalisation."),
 ]
 SpotOperator = Annotated[
     SpotOperatorTypes,
-    typer.Option("--operator", help="Spot operator."),
-]
-GeneCenter = Annotated[
-    bool,
-    typer.Option("--gene-center/--no-gene-center", help="Center gene weights."),
+    typer.Option("--operator", help="Spot-space centering: sample, label, or none."),
 ]
 SampleWeighting = Annotated[
     SampleWeightingTypes,
-    typer.Option("--sample-weighting", help="How to balance samples."),
+    typer.Option("--sample-weighting", help="How biological samples are balanced."),
 ]
-SampleNormaliseBy = Annotated[
-    SampleNormaliseTypes,
-    typer.Option(
-        "--normalise-by",
-        help="Gene scaling reference for sample-wise models.",
-    ),
-]
-MaskType = Annotated[
-    bool,
-    typer.Option(
-        "--soft-mask/--hard-mask",
-        help=(
-            "With --labels, use selected-label spots as kernel centers while "
-            "allowing kernels to include spots from any label. "
-            "Hard masking restricts both centres and neighbours."
-        ),
-    ),
-]
-BlockSize = Annotated[
-    int | None,
-    typer.Option(
-        "--block-size",
-        help="Maximum number of genes to compute at one time. Helps reduce memory requirements.",
-    ),
-]
-Dtype = Annotated[
-    Dtypes,
-    typer.Option(
-        "--dtype",
-        help="Data type used for internal calculation. "
-        "Use `float32` to lower memory requirements with potentially reduced numerical accuracy.",
-    ),
-]
-
-
-# ------------------------------------------------------------------------------
-# Preprocessing
-# ------------------------------------------------------------------------------
-class TransformTypes(str, Enum):
-    sqrt = "sqrt"
-    log1p = "log1p"
-
-
-class CovariateTypes(str, Enum):
-    log_total_counts = "log_total_counts"
-    log_detected_genes = "log_detected_genes"
-    mito_fraction = "mito_fraction"
-    ribo_fraction = "ribo_fraction"
-
-
-Transform = Annotated[
-    TransformTypes | None,
-    typer.Option("--transform", help="Counts transform after normalisation."),
-]
-MinCounts = Annotated[
-    int | None,
-    typer.Option("--min-counts", help="Minimum counts per gene."),
-]
-MinSpotFraction = Annotated[
+Alpha = Annotated[
     float | None,
-    typer.Option("--min-spot-fraction", help="Minimum fraction of spots per gene."),
+    typer.Option(
+        "--alpha",
+        help="Deprecated. alpha=0 maps to objective=covariance; nonzero alpha is unsupported.",
+    ),
 ]
+Transform = Annotated[TransformTypes | None, typer.Option("--transform")]
+MinCounts = Annotated[int | None, typer.Option("--min-counts")]
+MinSpotFraction = Annotated[float | None, typer.Option("--min-spot-fraction")]
 TargetSum = Annotated[
     float | None,
-    typer.Option("--target-sum", help="Per-spot normalisation target. Use 0 to disable."),
+    typer.Option("--target-sum", help="Per-cell normalisation target; omitted by default."),
 ]
 Covariates = Annotated[
     str | None,
     typer.Option(
         "--covariates",
-        callback=comma_separated_enum(CovariateTypes),
-        help="Covariate(s) to correct for (comma separated).",
+        help="Comma-separated: log_total_counts,log_detected_genes,mito_fraction,ribo_fraction.",
     ),
 ]
+Include = Annotated[str | None, typer.Option("--include")]
+Exclude = Annotated[str | None, typer.Option("--exclude")]
+Dtype = Annotated[Dtypes, typer.Option("--dtype")]
+Verbose = Annotated[bool, typer.Option("--verbose")]
 
-
-# ------------------------------------------------------------------------------
-# Clustering
-# ------------------------------------------------------------------------------
-class ClusterTypes(str, Enum):
-    spots = "spots"
-    genes = "genes"
-
-
-ClusterBy = Annotated[
-    ClusterTypes,
-    typer.Option("--by", help="Dimension to cluster."),
-]
-Neighbours = Annotated[
-    int,
-    typer.Option("--neighbours", help="Number of neighbours."),
-]
-Resolution = Annotated[
-    float,
-    typer.Option("--resolution", help="Leiden resolution."),
-]
-Metric = Annotated[
-    str,
-    typer.Option("--metric", help="Neighbour graph metric."),
-]
-NGenes = Annotated[
-    int | None,
-    typer.Option("--ngenes", help="Restrict to top n genes for clustering."),
-]
-Umap = Annotated[
-    bool,
-    typer.Option("--umap", help="Compute and plot UMAP."),
-]
-ClusterId = Annotated[
-    str | None,
-    typer.Option("--cluster-id", help="Clustering ID used to namespace clustering outputs."),
-]
-
-# ------------------------------------------------------------------------------
-# Misc
-# ------------------------------------------------------------------------------
-ExperimentId = Annotated[
-    str | None,
-    typer.Option(
-        "--experiment-id",
-        "-id",
-        help=("Experiment ID used to namespace Tanpopo outputs."),
-    ),
-]
-ExperimentIds = Annotated[
-    list[str],
-    typer.Option(
-        "--experiment-id",
-        "-id",
-        help="Experiment IDs used to namespace Tanpopo outputs.",
-    ),
-]
-Plot = Annotated[
-    bool,
-    typer.Option("--plot", help="Plot results."),
-]
-ShowPlot = Annotated[
-    bool,
-    typer.Option("--show/--no-show", help="Show plot."),
-]
-Modes = Annotated[
-    str | None,
-    typer.Option(
-        "--modes",
-        help=("Subset of modes, either comma separated or use colon slicing syntax."),
-    ),
-]
-Verbose = Annotated[
-    bool,
-    typer.Option("--verbose", help="Print timing information."),
-]
-CalculateSpacing = Annotated[
-    bool,
-    typer.Option("--calculate-spacing", help="Compute average distance to closest neighbour."),
-]
+Permutations = Annotated[int, typer.Option("--permutations", help="Sample-label permutations for differential FWER p-values.")]
+RandomSeed = Annotated[int, typer.Option("--seed", help="Random seed.")]
