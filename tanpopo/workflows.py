@@ -698,6 +698,30 @@ def inspect(fname: InputPath, calculate_spacing: CalculateSpacing = False):
 
 
 @app.command(no_args_is_help=True)
+def preprocess(
+    fname: InputPath,
+    output: OutputPath,
+    layer: Layer = None,
+    label_key: LabelKey = None,
+    include: Include = None,
+    exclude: Exclude = None,
+    transform: Transform = None,
+    min_counts: MinCounts = 10,
+    min_spot_fraction: MinSpotFraction = None,
+    target_sum: TargetSum = 1e4,
+    covariates: Covariates = None,
+    verbose: Verbose = False,
+):
+    """Preprocess sample without computing gene programs."""
+    incl_excl_args = _parse_include_exclude(include, exclude)
+    pre_args = preprocess_cfg(
+        target_sum, transform, min_counts, min_spot_fraction, covariates, label_key, layer
+    )
+    adata = load_preprocess_sample(fname, verbose=verbose, **pre_args, **incl_excl_args)
+    adata.write(output)
+
+
+@app.command(no_args_is_help=True)
 def cluster(
     fname: InputPath,
     by: ClusterBy,
