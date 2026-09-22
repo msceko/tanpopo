@@ -17,6 +17,7 @@ Check if it has installed correctly by running `tanpopo` to get a list of availa
 │ differential-sample-programs  Spatial programs whose covariance differs between biological sample groups.             │
 │ label-decomposition           Decompose total spatial covariance into between-label, within-label and coupling terms. │
 │ cross-programs                Paired neighbour-context and target-response gene programs.                             │
+│ shared-cross-programs         Paired target-neighbour programs shared across biological samples.                     │
 │ pca-programs                  Ordinary PCA globally or within selected cell types.                                    │
 │ estimate-spacing              Mean nearest-neighbour distance for a spatial sample.                                   │
 ╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
@@ -217,7 +218,59 @@ Outputs:
 The bipartite graph uses the same Wendland kernel with row/column degree
 normalisation.
 
-### 5. Exact label-source decomposition
+### 5. Shared target-neighbour programs across samples
+
+For a recurrent niche interaction, estimate one pair of gene programs jointly across
+biological samples rather than independently rotating each sample's SVD:
+
+```bash
+tanpopo shared-cross-programs \
+  -i patient1.h5ad \
+  -i patient2.h5ad \
+  -i patient3.h5ad \
+  -o shared_cross.h5ad \
+  --label-key cell_type \
+  --target-labels Fibroblasts \
+  --neighbour-labels Macrophages \
+  --radius 30 \
+  --components 5 \
+  --objective covariance
+```
+
+The pooled operator is
+
+\[
+C_{\mathrm{shared}} = \sum_s w_s\,Y_{t,s}^T A_{tu,s}Y_{u,s}.
+\]
+
+With the default `--sample-weighting n_spots`,
+
+\[
+w_s = \frac{1}{\sqrt{n_{t,s}n_{u,s}}},
+\]
+
+so a large tissue does not dominate solely because it contains more target or neighbour
+cells. `--sample-weighting none` gives every observed cell pair its unscaled
+contribution. The same `covariance`, `gene_standardized`, and `gain` objectives are
+available as for single-sample cross programs.
+
+In addition to the shared target/neighbour loadings, Tanpopo stores each shared mode's
+raw cross-spatial covariance in every biological sample. This is useful for checking
+that a pooled program is recurrent rather than driven by one patient.
+
+Outputs include:
+
+```text
+varm['tanpopo_<id>_target_loadings']
+varm['tanpopo_<id>_neighbour_loadings']
+obsm['tanpopo_<id>_target_modes']
+obsm['tanpopo_<id>_neighbour_modes']
+uns ['tanpopo'][<id>]['singular_values']
+uns ['tanpopo'][<id>]['sample_coefficients']
+uns ['tanpopo'][<id>]['sample_mode_covariance']
+```
+
+### 6. Exact label-source decomposition
 
 ```bash
 tanpopo label-decomposition \
@@ -348,6 +401,23 @@ model = CrossSpatialProgramModel(30, objective="gain").fit(
     target_mask=cell_type == "Fibroblasts",
     neighbour_mask=cell_type == "Macrophages",
 )
+```
+
+Shared cross-population programs:
+
+```python
+from tanpopo import SharedCrossSpatialProgramModel
+
+model = SharedCrossSpatialProgramModel(30, objective="covariance").fit(
+    [X1, X2, X3],
+    [coords1, coords2, coords3],
+    n_components=5,
+    target_masks=[ct1 == "Fibroblasts", ct2 == "Fibroblasts", ct3 == "Fibroblasts"],
+    neighbour_masks=[ct1 == "Macrophages", ct2 == "Macrophages", ct3 == "Macrophages"],
+)
+
+# rows are patients, columns are shared paired modes
+patient_covariance = model.sample_mode_covariance_
 ```
 
 ## Validation priorities

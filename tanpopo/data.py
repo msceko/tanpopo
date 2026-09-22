@@ -204,6 +204,31 @@ class SampleData:
         return self.W.tocsc(copy=False)
 
 
+@dataclass
+class CrossSampleData:
+    """Prepared target/neighbour data for one biological sample."""
+
+    W_target: sp.csr_matrix
+    W_neighbour: sp.csr_matrix
+    K: sp.csr_matrix
+    target_idx: np.ndarray
+    neighbour_idx: np.ndarray
+    covariates_target: np.ndarray | None = None
+    covariates_neighbour: np.ndarray | None = None
+
+    @property
+    def n_target(self):
+        return self.W_target.shape[0]
+
+    @property
+    def n_neighbour(self):
+        return self.W_neighbour.shape[0]
+
+    @property
+    def n_genes(self):
+        return self.W_target.shape[1]
+
+
 def prepare_sample(
     W,
     coords,
@@ -278,6 +303,156 @@ def prepare_samples(
         )
         for w, xy, lab, cov, mask in zip(W, coords, labels, covariates, masks)
     ]
+
+
+def prepare_cross_sample(
+    W,
+    coords,
+    radius,
+    target_mask,
+    neighbour_mask,
+    covariates=None,
+    dtype=np.float64,
+    graph_normalisation="symmetric",
+):
+    """Prepare one bipartite target-neighbour sample.
+
+    Target and neighbour masks may be disjoint or overlapping. If they are identical,
+    a square zero-diagonal graph is used, matching the single-sample cross workflow.
+    """
+    W = sp.csr_matrix(W, dtype=dtype)
+    coords = np.asarray(coords, dtype=dtype)
+    n = W.shape[0]
+    target_mask = np.asarray(target_mask, dtype=bool)
+    neighbour_mask = np.asarray(neighbour_mask, dtype=bool)
+    if target_mask.shape != (n,) or neighbour_mask.shape != (n,):
+        raise ValueError("target_mask and neighbour_mask must contain one value per spot")
+    if not np.any(target_mask) or not np.any(neighbour_mask):
+        raise ValueError("target_mask and neighbour_mask must each select at least one spot")
+    target_idx = np.flatnonzero(target_mask)
+    neighbour_idx = np.flatnonzero(neighbour_mask)
+    W_target = sp.csr_matrix(W[target_idx], dtype=dtype)
+    W_neighbour = sp.csr_matrix(W[neighbour_idx], dtype=dtype)
+    coords_target = coords[target_idx]
+    coords_neighbour = coords[neighbour_idx]
+
+    cov_target = cov_neighbour = None
+    if covariates is not None:
+        covariates = np.asarray(covariates, dtype=dtype)
+        if covariates.ndim == 1:
+            covariates = covariates[:, None]
+        cov_target = covariates[target_idx]
+        cov_neighbour = covariates[neighbour_idx]
+
+    if np.array_equal(target_idx, neighbour_idx):
+        K = kernel_matrix_sparse(
+            coords_target,
+            radius,
+            dtype=dtype,
+            normalisation=graph_normalisation,
+            zero_diagonal=True,
+        )
+    else:
+        K = kernel_matrix_sparse(
+            coords_target,
+            radius,
+            coords_query=coords_neighbour,
+            dtype=dtype,
+            normalisation=graph_normalisation,
+            zero_diagonal=False,
+        )
+
+    return CrossSampleData(
+        W_target=W_target,
+        W_neighbour=W_neighbour,
+        K=K,
+        target_idx=target_idx,
+        neighbour_idx=neighbour_idx,
+        covariates_target=cov_target,
+        covariates_neighbour=cov_neighbour,
+    )
+
+
+def prepare_cross_samples(
+    W,
+    coords,
+    radius,
+    target_masks,
+    neighbour_masks,
+    covariates=None,
+    dtype=np.float64,
+    graph_normalisation="symmetric",
+):
+    """Prepare matched target-neighbour data from multiple biological samples."""
+    W = as_list(W)
+    coords = as_list(coords)
+    target_masks = as_list(target_masks)
+    neighbour_masks = as_list(neighbour_masks)
+    covariates = none_to_list(covariates, len(W))
+    lengths = {len(W), len(coords), len(target_masks), len(neighbour_masks), len(covariates)}
+    if lengths != {len(W)}:
+        raise ValueError("W, coords, masks and covariates must contain the same number of samples")
+    return [
+        prepare_cross_sample(
+            w,
+            xy,
+            radius,
+            target_mask,
+            neighbour_mask,
+            cov,
+            dtype=dtype,
+            graph_normalisation=graph_normalisation,
+        )
+        for w, xy, target_mask, neighbour_mask, cov in zip(
+            W, coords, target_masks, neighbour_masks, covariates
+        )
+    ]
+
+
+def _stack_cross_covariates(samples, side):
+    attr = f"covariates_{side}"
+    values = [getattr(sample, attr) for sample in samples]
+    if not any(value is not None for value in values):
+        return None
+    n_cov = next(value.shape[1] for value in values if value is not None)
+    rows_attr = "n_target" if side == "target" else "n_neighbour"
+    return np.vstack(
+        [
+            np.zeros((getattr(sample, rows_attr), n_cov)) if value is None else value
+            for sample, value in zip(samples, values)
+        ]
+    )
+
+
+def concatenate_cross_samples(samples):
+    """Concatenate cross-sample matrices while preserving sample-wise centering."""
+    if not samples:
+        raise ValueError("At least one cross sample is required")
+    n_genes = samples[0].n_genes
+    if any(sample.n_genes != n_genes for sample in samples):
+        raise ValueError("All cross samples must contain the same genes")
+    W_target = sp.vstack([sample.W_target for sample in samples], format="csr")
+    W_neighbour = sp.vstack([sample.W_neighbour for sample in samples], format="csr")
+    K = sp.block_diag([sample.K for sample in samples], format="csr")
+
+    target_lengths = np.asarray([sample.n_target for sample in samples], dtype=np.int64)
+    neighbour_lengths = np.asarray([sample.n_neighbour for sample in samples], dtype=np.int64)
+    target_offsets = np.r_[0, np.cumsum(target_lengths[:-1])].astype(np.int64)
+    neighbour_offsets = np.r_[0, np.cumsum(neighbour_lengths[:-1])].astype(np.int64)
+    target_groups = Groups(target_offsets, target_lengths)
+    neighbour_groups = Groups(neighbour_offsets, neighbour_lengths)
+
+    cov_target = _stack_cross_covariates(samples, "target")
+    cov_neighbour = _stack_cross_covariates(samples, "neighbour")
+    return (
+        W_target,
+        W_neighbour,
+        K,
+        target_groups,
+        neighbour_groups,
+        cov_target,
+        cov_neighbour,
+    )
 
 
 def concatenate_samples(samples):

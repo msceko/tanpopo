@@ -16,11 +16,13 @@ from tanpopo.io import (
     preprocess_cfg,
     store_cross_result,
     store_sample_result,
+    store_shared_cross_result,
 )
 from tanpopo.kernel import neighbour_spacing
 from tanpopo.models import (
     CrossSpatialProgramModel,
     DifferentialSpatialProgramModel,
+    SharedCrossSpatialProgramModel,
     LabelDecompositionModel,
     SharedSpatialProgramModel,
     SpatialProgramModel,
@@ -86,6 +88,21 @@ def _single_multisample_label(adatas, text, label_key):
         if label not in set(adata.obs[label_key].unique()):
             raise typer.BadParameter(f"Label {label!r} is not present in every sample")
     return label
+
+
+def _multisample_labels(adatas, text, label_key, option_name):
+    if text is None:
+        raise typer.BadParameter(f"{option_name} is required")
+    labels = _parse_csv_labels(adatas[0], text, label_key, allow_all=False)
+    for adata in adatas[1:]:
+        _require_obs_key(adata, label_key)
+        available = set(adata.obs[label_key].unique())
+        missing = [label for label in labels if label not in available]
+        if missing:
+            raise typer.BadParameter(
+                f"{option_name} label(s) {missing} are not present in every sample"
+            )
+    return labels
 
 
 def _resolve_objective(objective, alpha):
@@ -505,6 +522,102 @@ def label_decomposition(
     if output is not None:
         adata.write_h5ad(output)
     return adata
+
+
+@app.command("shared-cross-programs", no_args_is_help=True)
+def shared_cross_programs(
+    fnames: InputPaths,
+    label_key: LabelKey,
+    target_labels: TargetLabels,
+    neighbour_labels: NeighbourLabels,
+    output: OutputPath = None,
+    cmd_id: ExperimentId = "shared_cross",
+    radius: Radius = None,
+    sample_names: SampleNames = None,
+    n_components: Components = 8,
+    layer: Layer = None,
+    objective: Objective = ObjectiveTypes.covariance,
+    expression_rank: ExpressionRank = 50,
+    gain_ridge: GainRidge = 1e-8,
+    graph_normalisation: GraphNormalisation = GraphNormalisationTypes.symmetric,
+    sample_weighting: SampleWeighting = SampleWeightingTypes.n_spots,
+    include: Include = None,
+    exclude: Exclude = None,
+    transform: Transform = None,
+    min_counts: MinCounts = 10,
+    min_spot_fraction: MinSpotFraction = None,
+    target_sum: TargetSum = None,
+    covariates: Covariates = None,
+    dtype: Dtype = Dtypes.float64,
+    verbose: Verbose = False,
+):
+    """Paired target-neighbour gene programs shared across biological samples."""
+    if len(fnames) < 2:
+        raise typer.BadParameter("shared-cross-programs requires at least two inputs")
+    pre = _pre_args(
+        target_sum,
+        transform,
+        min_counts,
+        min_spot_fraction,
+        covariates,
+        label_key,
+        layer,
+        include,
+        exclude,
+    )
+    adatas, sample_names = load_preprocess_samples(
+        fnames, sample_names, verbose=verbose, **pre
+    )
+    _require_obs_key(adatas[0], label_key)
+    targets = _multisample_labels(adatas, target_labels, label_key, "--target-labels")
+    neighbours = _multisample_labels(
+        adatas, neighbour_labels, label_key, "--neighbour-labels"
+    )
+    W, coords, covs, target_masks, neighbour_masks = [], [], [], [], []
+    for adata in adatas:
+        w, xy, cov = get_spatial_from_anndata(adata, layer)
+        W.append(w)
+        coords.append(xy)
+        covs.append(cov)
+        target_masks.append(adata.obs[label_key].isin(targets).to_numpy())
+        neighbour_masks.append(adata.obs[label_key].isin(neighbours).to_numpy())
+
+    if radius is None:
+        radius = _radius_from_mask(adatas[0], target_masks[0] | neighbour_masks[0])
+    model = SharedCrossSpatialProgramModel(
+        radius,
+        objective=as_value(objective),
+        sample_weighting=as_value(sample_weighting),
+        expression_rank=expression_rank,
+        gain_ridge=gain_ridge,
+        graph_normalisation=as_value(graph_normalisation),
+        dtype=as_value(dtype),
+        verbose=verbose,
+    ).fit(
+        W,
+        coords,
+        n_components,
+        target_masks=target_masks,
+        neighbour_masks=neighbour_masks,
+        covariates=covs,
+    )
+    combined = store_shared_cross_result(adatas, sample_names, model, cmd_id)
+    add_metadata(
+        combined,
+        cmd_id,
+        pre,
+        model_cfg(model),
+        {
+            "sample_names": sample_names,
+            "target_labels": [str(x) for x in targets],
+            "neighbour_labels": [str(x) for x in neighbours],
+            "sample_coefficients": model.sample_coefficients_,
+            "sample_mode_covariance": model.sample_mode_covariance_,
+        },
+    )
+    if output is not None:
+        combined.write_h5ad(output)
+    return combined
 
 
 @app.command("cross-programs", no_args_is_help=True)

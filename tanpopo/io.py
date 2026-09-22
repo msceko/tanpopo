@@ -148,6 +148,35 @@ def store_multi_sample_result(adatas, sample_names, model, cmd_id, key=""):
     return combined
 
 
+def store_shared_cross_result(adatas, sample_names, model, cmd_id):
+    """Store shared cross-program loadings and per-sample projected modes."""
+    prefix = f"tanpopo_{cmd_id}"
+    for adata, sample, target_modes, neighbour_modes in zip(
+        adatas, model.samples, model.target_modes, model.neighbour_modes
+    ):
+        target = np.full((adata.n_obs, target_modes.shape[1]), np.nan)
+        neighbour = np.full((adata.n_obs, neighbour_modes.shape[1]), np.nan)
+        target[sample.target_idx] = target_modes
+        neighbour[sample.neighbour_idx] = neighbour_modes
+        adata.obsm[f"{prefix}_target_modes"] = target
+        adata.obsm[f"{prefix}_neighbour_modes"] = neighbour
+
+    combined = concat_adata_samples(adatas, sample_names)
+    combined.varm[f"{prefix}_target_loadings"] = model.target_loadings
+    combined.varm[f"{prefix}_neighbour_loadings"] = model.neighbour_loadings
+    combined.uns.setdefault("tanpopo", {}).setdefault(cmd_id, {})
+    combined.uns["tanpopo"][cmd_id]["singular_values"] = np.asarray(
+        model.singular_values
+    )
+    combined.uns["tanpopo"][cmd_id]["sample_coefficients"] = np.asarray(
+        model.sample_coefficients_
+    )
+    combined.uns["tanpopo"][cmd_id]["sample_mode_covariance"] = np.asarray(
+        model.sample_mode_covariance_
+    )
+    return combined
+
+
 def store_cross_result(adata, model, cmd_id):
     prefix = f"tanpopo_{cmd_id}"
     target = np.full((adata.n_obs, model.target_modes.shape[1]), np.nan)

@@ -5,8 +5,13 @@ import scipy.sparse as sp
 from scipy.linalg import eigh, svd
 from scipy.sparse.linalg import eigsh, svds
 
-from tanpopo.data import Groups, concatenate_samples, prepare_samples
-from tanpopo.kernel import kernel_matrix_sparse
+from tanpopo.data import (
+    Groups,
+    concatenate_cross_samples,
+    concatenate_samples,
+    prepare_cross_samples,
+    prepare_samples,
+)
 from tanpopo.operators import (
     BetweenLabelTransform,
     BilinearGeneOperator,
@@ -47,6 +52,50 @@ def _weighted_block_kernel(samples, weights, signs=None):
 def _row_scale(samples, weights):
     return np.concatenate(
         [np.full(s.n_spots, np.sqrt(float(w)), dtype=float) for s, w in zip(samples, weights)]
+    )
+
+
+def _cross_sample_weights(samples, mode):
+    if mode == "none":
+        return np.ones(len(samples), dtype=float)
+    if mode == "n_spots":
+        effective_n = np.sqrt(
+            np.asarray([sample.n_target * sample.n_neighbour for sample in samples], dtype=float)
+        )
+        return 1.0 / effective_n
+    raise ValueError("sample_weighting must be 'none' or 'n_spots'")
+
+
+def _cross_row_scale(samples, weights, side):
+    attr = "n_target" if side == "target" else "n_neighbour"
+    return np.concatenate(
+        [
+            np.full(getattr(sample, attr), np.sqrt(float(weight)), dtype=float)
+            for sample, weight in zip(samples, weights)
+        ]
+    )
+
+
+def _split_cross_modes(phi, samples, side):
+    attr = "n_target" if side == "target" else "n_neighbour"
+    output = []
+    start = 0
+    for sample in samples:
+        stop = start + getattr(sample, attr)
+        output.append(np.asarray(phi[start:stop]))
+        start = stop
+    return output
+
+
+def _orient_cross_pairs(target_loadings, neighbour_loadings):
+    target_loadings = column_normalize(target_loadings)
+    neighbour_loadings = column_normalize(neighbour_loadings)
+    orient_idx = np.argmax(np.abs(target_loadings), axis=0)
+    pair_sign = np.sign(target_loadings[orient_idx, np.arange(target_loadings.shape[1])])
+    pair_sign[pair_sign == 0] = 1
+    return (
+        target_loadings * pair_sign[None, :],
+        neighbour_loadings * pair_sign[None, :],
     )
 
 
@@ -370,13 +419,14 @@ class DifferentialSpatialProgramModel(SpatialProgramModel):
         return pvalues
 
 
-class CrossSpatialProgramModel:
-    """Paired target-neighbour gene programs from a bipartite spatial graph."""
+class _CrossSpatialProgramBase:
+    """Shared implementation for single- and multi-sample cross programs."""
 
     def __init__(
         self,
         radius,
         objective="covariance",
+        sample_weighting="none",
         expression_rank=50,
         gain_ridge=1e-8,
         graph_normalisation="symmetric",
@@ -389,6 +439,7 @@ class CrossSpatialProgramModel:
             raise ValueError(f"objective must be one of {sorted(VALID_OBJECTIVES)}")
         self.radius = float(radius)
         self.objective = objective
+        self.sample_weighting = sample_weighting
         self.expression_rank = int(expression_rank)
         self.gain_ridge = float(gain_ridge)
         self.graph_normalisation = graph_normalisation
@@ -396,6 +447,197 @@ class CrossSpatialProgramModel:
         self.block_size = block_size
         self.dtype = np.dtype(dtype)
         self.verbose = verbose
+
+    def _fit_prepared(self, samples, n_components, tol=0):
+        self.samples = samples
+        (
+            W_target,
+            W_neighbour,
+            K,
+            target_groups,
+            neighbour_groups,
+            cov_target,
+            cov_neighbour,
+        ) = concatenate_cross_samples(samples)
+        weights = _cross_sample_weights(samples, self.sample_weighting)
+        Pt = SpotProjector(
+            W_target.shape[0],
+            target_groups,
+            cov_target,
+            self.covariates_tol,
+            dtype=self.dtype,
+        )
+        Pu = SpotProjector(
+            W_neighbour.shape[0],
+            neighbour_groups,
+            cov_neighbour,
+            self.covariates_tol,
+            dtype=self.dtype,
+        )
+
+        if self.objective == "gain":
+            self._fit_gain(
+                W_target, W_neighbour, Pt, Pu, K, samples, weights, n_components, tol
+            )
+        else:
+            self._fit_covariance(
+                W_target, W_neighbour, Pt, Pu, K, samples, weights, n_components, tol
+            )
+
+        target_phi = Pt.apply(W_target @ self.target_loadings)
+        neighbour_phi = Pu.apply(W_neighbour @ self.neighbour_loadings)
+        self.target_modes = _split_cross_modes(target_phi, samples, "target")
+        self.neighbour_modes = _split_cross_modes(neighbour_phi, samples, "neighbour")
+        self.sample_coefficients_ = weights
+        self.sample_mode_covariance_ = self._sample_mode_covariance()
+        return self
+
+    def _fit_covariance(
+        self, W_target, W_neighbour, Pt, Pu, K, samples, weights, n_components, tol
+    ):
+        scale_target = scale_neighbour = None
+        if self.objective == "gene_standardized":
+            target_scale = _cross_row_scale(samples, weights, "target")
+            neighbour_scale = _cross_row_scale(samples, weights, "neighbour")
+            W_target_scaled = sp.diags(target_scale, format="csr") @ W_target
+            W_neighbour_scaled = sp.diags(neighbour_scale, format="csr") @ W_neighbour
+            var_target = gene_expression_variance(
+                W_target_scaled, Pt, self.block_size, eps=1e-12
+            )
+            var_neighbour = gene_expression_variance(
+                W_neighbour_scaled, Pu, self.block_size, eps=1e-12
+            )
+            scale_target = expression_scale_from_variance(var_target)
+            scale_neighbour = expression_scale_from_variance(var_neighbour)
+            self.target_gene_expression_variance_ = var_target
+            self.neighbour_gene_expression_variance_ = var_neighbour
+
+        K_weighted = sp.block_diag(
+            [float(weight) * sample.K for sample, weight in zip(samples, weights)],
+            format="csr",
+        )
+        operator = CrossGeneOperator(
+            W_target,
+            W_neighbour,
+            K_weighted,
+            Pt,
+            Pu,
+            scale_target,
+            scale_neighbour,
+            dtype=self.dtype,
+        )
+        k = min(int(n_components), min(operator.shape) - 1)
+        if k < 1:
+            raise ValueError("At least two genes are required for cross-program analysis")
+        U, singular, Vt = svds(operator, k=k, which="LM", tol=tol)
+        order = np.argsort(singular)[::-1]
+        singular, U, Vt = singular[order], U[:, order], Vt[order]
+        target_loadings = U if scale_target is None else scale_target[:, None] * U
+        neighbour_loadings = (
+            Vt.T if scale_neighbour is None else scale_neighbour[:, None] * Vt.T
+        )
+        self.singular_values = singular
+        self.target_loadings, self.neighbour_loadings = _orient_cross_pairs(
+            target_loadings, neighbour_loadings
+        )
+
+    def _fit_gain(
+        self, W_target, W_neighbour, Pt, Pu, K, samples, weights, n_components, tol
+    ):
+        target_row_scale = _cross_row_scale(samples, weights, "target")
+        neighbour_row_scale = _cross_row_scale(samples, weights, "neighbour")
+        rank_target = max(self.expression_rank, int(n_components) + 2)
+        rank_neighbour = max(self.expression_rank, int(n_components) + 2)
+        Ut, st, Vtt = projected_svd(
+            W_target,
+            Pt,
+            rank_target,
+            row_scale=target_row_scale,
+            dtype=self.dtype,
+            tol=tol,
+        )
+        Uu, su, Vtu = projected_svd(
+            W_neighbour,
+            Pu,
+            rank_neighbour,
+            row_scale=neighbour_row_scale,
+            dtype=self.dtype,
+            tol=tol,
+        )
+        dt = st / np.sqrt(np.square(st) + self.gain_ridge)
+        du = su / np.sqrt(np.square(su) + self.gain_ridge)
+        H = dt[:, None] * (Ut.T @ (K @ Uu)) * du[None, :]
+        left, singular, right_t = svd(H, full_matrices=False)
+        k = min(int(n_components), len(singular))
+        left, singular, right_t = left[:, :k], singular[:k], right_t[:k]
+        denom_target = np.sqrt(np.square(st) + self.gain_ridge)
+        denom_neighbour = np.sqrt(np.square(su) + self.gain_ridge)
+        target_loadings = Vtt.T @ (
+            (1.0 / np.maximum(denom_target, 1e-12))[:, None] * left
+        )
+        neighbour_loadings = Vtu.T @ (
+            (1.0 / np.maximum(denom_neighbour, 1e-12))[:, None] * right_t.T
+        )
+        self.singular_values = singular
+        self.target_loadings, self.neighbour_loadings = _orient_cross_pairs(
+            target_loadings, neighbour_loadings
+        )
+        self.target_expression_singular_values_ = st
+        self.neighbour_expression_singular_values_ = su
+
+    def _sample_mode_covariance(self):
+        values = []
+        for sample, target_modes, neighbour_modes in zip(
+            self.samples, self.target_modes, self.neighbour_modes
+        ):
+            spatial_neighbour = sample.K @ neighbour_modes
+            values.append(np.sum(target_modes * spatial_neighbour, axis=0))
+        return np.vstack(values)
+
+
+class SharedCrossSpatialProgramModel(_CrossSpatialProgramBase):
+    """Paired target-neighbour programs shared across biological samples.
+
+    Each sample contributes its bipartite cross-covariance independently. With
+    ``sample_weighting='n_spots'`` (the default), sample ``s`` is weighted by
+    ``1 / sqrt(n_target_s * n_neighbour_s)`` so a large tissue does not dominate
+    merely because it contains more cells.
+    """
+
+    def __init__(self, *args, sample_weighting="n_spots", **kwargs):
+        super().__init__(*args, sample_weighting=sample_weighting, **kwargs)
+
+    def fit(
+        self,
+        W,
+        coords,
+        n_components,
+        target_masks,
+        neighbour_masks,
+        covariates=None,
+        tol=0,
+    ):
+        with timed("Preparing cross samples", self.verbose):
+            samples = prepare_cross_samples(
+                W,
+                coords,
+                self.radius,
+                target_masks,
+                neighbour_masks,
+                covariates=covariates,
+                dtype=self.dtype,
+                graph_normalisation=self.graph_normalisation,
+            )
+        with timed("Solving shared cross-program objective", self.verbose):
+            return self._fit_prepared(samples, n_components, tol=tol)
+
+
+class CrossSpatialProgramModel(_CrossSpatialProgramBase):
+    """Paired target-neighbour gene programs from one biological sample."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs.pop("sample_weighting", None)
+        super().__init__(*args, sample_weighting="none", **kwargs)
 
     def fit(
         self,
@@ -407,100 +649,26 @@ class CrossSpatialProgramModel:
         covariates=None,
         tol=0,
     ):
-        W = sp.csr_matrix(W, dtype=self.dtype)
-        coords = np.asarray(coords, dtype=self.dtype)
-        target_mask = np.asarray(target_mask, dtype=bool)
-        neighbour_mask = np.asarray(neighbour_mask, dtype=bool)
-        if not np.any(target_mask) or not np.any(neighbour_mask):
-            raise ValueError("target_mask and neighbour_mask must each select cells")
-        self.target_idx = np.flatnonzero(target_mask)
-        self.neighbour_idx = np.flatnonzero(neighbour_mask)
-        Wt, Wu = W[target_mask], W[neighbour_mask]
-        Ct, Cu = coords[target_mask], coords[neighbour_mask]
-        cov_t = None if covariates is None else np.asarray(covariates)[target_mask]
-        cov_u = None if covariates is None else np.asarray(covariates)[neighbour_mask]
-        Pt = SpotProjector(Wt.shape[0], Groups.single(Wt.shape[0]), cov_t, self.covariates_tol)
-        Pu = SpotProjector(Wu.shape[0], Groups.single(Wu.shape[0]), cov_u, self.covariates_tol)
-
-        if np.array_equal(self.target_idx, self.neighbour_idx):
-            K = kernel_matrix_sparse(
-                Ct,
+        with timed("Preparing cross sample", self.verbose):
+            samples = prepare_cross_samples(
+                [W],
+                [coords],
                 self.radius,
+                [target_mask],
+                [neighbour_mask],
+                covariates=None if covariates is None else [covariates],
                 dtype=self.dtype,
-                normalisation=self.graph_normalisation,
-                zero_diagonal=True,
+                graph_normalisation=self.graph_normalisation,
             )
-        else:
-            K = kernel_matrix_sparse(
-                Ct,
-                self.radius,
-                coords_query=Cu,
-                dtype=self.dtype,
-                normalisation=self.graph_normalisation,
-                zero_diagonal=False,
-            )
-        self.K_cross_ = K
-
-        if self.objective == "gain":
-            self._fit_gain(Wt, Wu, Pt, Pu, K, n_components, tol)
-        else:
-            self._fit_covariance(Wt, Wu, Pt, Pu, K, n_components, tol)
+        with timed("Solving cross-program objective", self.verbose):
+            self._fit_prepared(samples, n_components, tol=tol)
+        sample = self.samples[0]
+        self.K_cross_ = sample.K
+        self.target_idx = sample.target_idx
+        self.neighbour_idx = sample.neighbour_idx
+        self.target_modes = self.target_modes[0]
+        self.neighbour_modes = self.neighbour_modes[0]
         return self
-
-    def _fit_covariance(self, Wt, Wu, Pt, Pu, K, n_components, tol):
-        scale_t = scale_u = None
-        if self.objective == "gene_standardized":
-            var_t = gene_expression_variance(Wt, Pt, self.block_size, eps=1e-12)
-            var_u = gene_expression_variance(Wu, Pu, self.block_size, eps=1e-12)
-            scale_t = expression_scale_from_variance(var_t)
-            scale_u = expression_scale_from_variance(var_u)
-        C = CrossGeneOperator(Wt, Wu, K, Pt, Pu, scale_t, scale_u, dtype=self.dtype)
-        k = min(int(n_components), min(C.shape) - 1)
-        U, singular, Vt = svds(C, k=k, which="LM", tol=tol)
-        order = np.argsort(singular)[::-1]
-        singular, U, Vt = singular[order], U[:, order], Vt[order]
-        target_loadings = U if scale_t is None else scale_t[:, None] * U
-        neighbour_loadings = Vt.T if scale_u is None else scale_u[:, None] * Vt.T
-        self.singular_values = singular
-        target_loadings = column_normalize(target_loadings)
-        neighbour_loadings = column_normalize(neighbour_loadings)
-        orient_idx = np.argmax(np.abs(target_loadings), axis=0)
-        pair_sign = np.sign(target_loadings[orient_idx, np.arange(target_loadings.shape[1])])
-        pair_sign[pair_sign == 0] = 1
-        self.target_loadings = target_loadings * pair_sign[None, :]
-        self.neighbour_loadings = neighbour_loadings * pair_sign[None, :]
-        self.target_modes = Pt.apply(Wt @ self.target_loadings)
-        self.neighbour_modes = Pu.apply(Wu @ self.neighbour_loadings)
-
-    def _fit_gain(self, Wt, Wu, Pt, Pu, K, n_components, tol):
-        rank_t = max(self.expression_rank, int(n_components) + 2)
-        rank_u = max(self.expression_rank, int(n_components) + 2)
-        Ut, st, Vtt = projected_svd(Wt, Pt, rank_t, dtype=self.dtype, tol=tol)
-        Uu, su, Vtu = projected_svd(Wu, Pu, rank_u, dtype=self.dtype, tol=tol)
-        dt = st / np.sqrt(np.square(st) + self.gain_ridge)
-        du = su / np.sqrt(np.square(su) + self.gain_ridge)
-        H = dt[:, None] * (Ut.T @ (K @ Uu)) * du[None, :]
-        left, singular, right_t = svd(H, full_matrices=False)
-        k = min(int(n_components), len(singular))
-        left, singular, right_t = left[:, :k], singular[:k], right_t[:k]
-        denom_t = np.sqrt(np.square(st) + self.gain_ridge)
-        denom_u = np.sqrt(np.square(su) + self.gain_ridge)
-        target_loadings = Vtt.T @ ((1.0 / np.maximum(denom_t, 1e-12))[:, None] * left)
-        neighbour_loadings = Vtu.T @ (
-            (1.0 / np.maximum(denom_u, 1e-12))[:, None] * right_t.T
-        )
-        self.singular_values = singular
-        target_loadings = column_normalize(target_loadings)
-        neighbour_loadings = column_normalize(neighbour_loadings)
-        orient_idx = np.argmax(np.abs(target_loadings), axis=0)
-        pair_sign = np.sign(target_loadings[orient_idx, np.arange(target_loadings.shape[1])])
-        pair_sign[pair_sign == 0] = 1
-        self.target_loadings = target_loadings * pair_sign[None, :]
-        self.neighbour_loadings = neighbour_loadings * pair_sign[None, :]
-        self.target_modes = Pt.apply(Wt @ self.target_loadings)
-        self.neighbour_modes = Pu.apply(Wu @ self.neighbour_loadings)
-        self.target_expression_singular_values_ = st
-        self.neighbour_expression_singular_values_ = su
 
 
 class LabelDecompositionModel:

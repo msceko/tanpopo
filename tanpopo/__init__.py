@@ -2,6 +2,7 @@ from tanpopo.models import (
     CrossSpatialProgramModel,
     DifferentialSpatialProgramModel,
     LabelDecompositionModel,
+    SharedCrossSpatialProgramModel,
     SharedSpatialProgramModel,
     SpatialProgramModel,
     SpatialGeneKPCA,
@@ -12,6 +13,7 @@ from tanpopo.models import (
 __all__ = [
     "SpatialProgramModel",
     "SharedSpatialProgramModel",
+    "SharedCrossSpatialProgramModel",
     "DifferentialSpatialProgramModel",
     "LabelDecompositionModel",
     "CrossSpatialProgramModel",
