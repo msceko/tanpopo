@@ -29,6 +29,17 @@ class GraphNormalisationTypes(str, Enum):
     none = "none"
 
 
+class SpatialStatisticTypes(str, Enum):
+    mark_correlation = "mark_correlation"
+    variogram = "variogram"
+
+
+class GeometryNormalisationTypes(str, Enum):
+    none = "none"
+    mass = "mass"
+    distance = "distance"
+
+
 class TransformTypes(str, Enum):
     sqrt = "sqrt"
     log1p = "log1p"
@@ -97,6 +108,35 @@ GainRidge = Annotated[
 GraphNormalisation = Annotated[
     GraphNormalisationTypes,
     typer.Option("--graph-normalisation", help="Spatial graph degree normalisation."),
+]
+SpatialStatistic = Annotated[
+    SpatialStatisticTypes,
+    typer.Option(
+        "--spatial-statistic",
+        help="Pair statistic: mark_correlation or variogram.",
+    ),
+]
+GeometryNormalisation = Annotated[
+    GeometryNormalisationTypes,
+    typer.Option(
+        "--geometry-normalisation",
+        help="Geometry balancing: none, mass, or distance.",
+    ),
+]
+DistanceBins = Annotated[
+    int,
+    typer.Option(
+        "--distance-bins",
+        min=1,
+        help="Equal-width distance bins used by geometry-normalisation=distance.",
+    ),
+]
+NullCenter = Annotated[
+    bool,
+    typer.Option(
+        "--null-center/--no-null-center",
+        help="Subtract the exact random-labelling baseline for mark correlation.",
+    ),
 ]
 SpotOperator = Annotated[
     SpotOperatorTypes,

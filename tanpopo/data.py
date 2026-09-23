@@ -7,7 +7,7 @@ import numpy as np
 import scipy.sparse as sp
 
 from tanpopo.covariates import compute_covariates
-from tanpopo.kernel import kernel_matrix_sparse
+from tanpopo.kernel import kernel_matrix_sparse, spatial_statistic_kernels
 from tanpopo.utils import as_list, get_counts_matrix, none_to_list, pd_dtype
 
 
@@ -190,6 +190,7 @@ class SampleData:
     obs_idx: np.ndarray
     labels_groups: Groups
     covariates: np.ndarray | None = None
+    geometry_diagnostics: dict | None = None
 
     @property
     def n_spots(self):
@@ -229,20 +230,20 @@ class CrossSampleData:
         return self.W_target.shape[1]
 
 
-def prepare_sample(
+def _prepare_sample_arrays(
     W,
     coords,
-    radius,
     labels=None,
     covariates=None,
     mask=None,
     dtype=np.float64,
-    graph_normalisation="symmetric",
 ):
-    """Hard-mask a sample, order by labels, and build a zero-diagonal graph."""
+    """Apply a hard mask and label ordering without constructing spatial weights."""
     W = sp.csr_matrix(W, dtype=dtype)
     coords = np.asarray(coords, dtype=dtype)
     n = W.shape[0]
+    if coords.shape[0] != n:
+        raise ValueError("W and coords must contain the same number of spots")
     if mask is None:
         mask = np.ones(n, dtype=bool)
     else:
@@ -265,14 +266,36 @@ def prepare_sample(
         cov = np.asarray(covariates, dtype=dtype)[idx]
         if cov.ndim == 1:
             cov = cov[:, None]
-    K = kernel_matrix_sparse(
-        coords_sub,
+    return W_sub, coords_sub, inv, spot_idx, groups, cov
+
+
+def prepare_sample(
+    W,
+    coords,
+    radius,
+    labels=None,
+    covariates=None,
+    mask=None,
+    dtype=np.float64,
+    graph_normalisation="symmetric",
+    spatial_statistic="mark_correlation",
+    geometry_normalisation="distance",
+    distance_bins=10,
+):
+    """Prepare one hard-masked sample and its geometry-standardised operator."""
+    return prepare_samples(
+        [W],
+        [coords],
         radius,
+        labels=None if labels is None else [labels],
+        covariates=None if covariates is None else [covariates],
+        masks=None if mask is None else [mask],
         dtype=dtype,
-        normalisation=graph_normalisation,
-        zero_diagonal=True,
-    )
-    return SampleData(W_sub, K, inv, spot_idx, groups, cov)
+        graph_normalisation=graph_normalisation,
+        spatial_statistic=spatial_statistic,
+        geometry_normalisation=geometry_normalisation,
+        distance_bins=distance_bins,
+    )[0]
 
 
 def prepare_samples(
@@ -284,26 +307,52 @@ def prepare_samples(
     masks=None,
     dtype=np.float64,
     graph_normalisation="symmetric",
+    spatial_statistic="mark_correlation",
+    geometry_normalisation="distance",
+    distance_bins=10,
 ):
+    """Prepare matched samples and build their spatial operators jointly.
+
+    Joint construction is required for ``geometry_normalisation='distance'``:
+    the pair-distance target is estimated once from all included biological
+    samples and then imposed on every sample before model fitting.
+    """
     W = as_list(W)
     coords = as_list(coords)
+    if len(coords) != len(W):
+        raise ValueError("W and coords must contain the same number of samples")
     labels = none_to_list(labels, len(W))
     covariates = none_to_list(covariates, len(W))
     masks = none_to_list(masks, len(W))
-    return [
-        prepare_sample(
-            w,
-            xy,
-            radius,
-            lab,
-            cov,
-            mask,
-            dtype,
-            graph_normalisation,
-        )
+
+    prepared = [
+        _prepare_sample_arrays(w, xy, lab, cov, mask, dtype)
         for w, xy, lab, cov, mask in zip(W, coords, labels, covariates, masks)
     ]
-
+    coords_sub = [item[1] for item in prepared]
+    kernels, diagnostics = spatial_statistic_kernels(
+        coords_sub,
+        radius,
+        spatial_statistic=spatial_statistic,
+        geometry_normalisation=geometry_normalisation,
+        distance_bins=distance_bins,
+        graph_normalisation=graph_normalisation,
+        dtype=dtype,
+    )
+    return [
+        SampleData(
+            W_sub,
+            K,
+            inv,
+            spot_idx,
+            groups,
+            cov,
+            geometry_diagnostics=diag,
+        )
+        for (W_sub, _, inv, spot_idx, groups, cov), K, diag in zip(
+            prepared, kernels, diagnostics
+        )
+    ]
 
 def prepare_cross_sample(
     W,

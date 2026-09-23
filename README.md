@@ -14,8 +14,8 @@ Check if it has installed correctly by running `tanpopo` to get a list of availa
 ╭─ Commands ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ spatial-programs              Spatial programs globally or within selected cell types.                                │
 │ shared-programs               Shared spatial programs across biological samples, optionally within one cell type.     │
-│ differential-sample-programs  Spatial programs whose covariance differs between biological sample groups.             │
-│ label-decomposition           Decompose total spatial covariance into between-label, within-label and coupling terms. │
+│ differential-sample-programs  Spatial programs whose pair statistic differs between biological sample groups.        │
+│ label-decomposition           Decompose a spatial pair statistic into between-label, within-label and coupling terms. │
 │ cross-programs                Paired neighbour-context and target-response gene programs.                             │
 │ shared-cross-programs         Paired target-neighbour programs shared across biological samples.                     │
 │ pca-programs                  Ordinary PCA globally or within selected cell types.                                    │
@@ -26,10 +26,10 @@ Check if it has installed correctly by running `tanpopo` to get a list of availa
 > [!NOTE]
 > You may need to deactivate and source your environment for `tanpopo` to appear.
 
-# tanpopo 0.2 — conditional spatial covariance programs
+# tanpopo 0.2 — conditional spatial pair-statistic programs
 
 This branch narrows Tanpopo to the part of the project supported by the current
-simulation results: **conditional and comparative multigene spatial covariance**.
+simulation results: **conditional and comparative multigene spatial pair statistics**.
 
 The package keeps the original Tanpopo architecture where possible:
 
@@ -38,11 +38,15 @@ AnnData / NumPy input
       ↓
 prepare_samples
       ↓
-zero-diagonal spatial graph
+zero-diagonal pair adjacency
+      ↓
+geometry standardisation
+      ↓
+mark-correlation adjacency OR variogram Laplacian
       ↓
 SpotProjector (centering + covariates)
       ↓
-spatial gene operator
+gene-space spatial-statistic operator
       ↓
 eigensolver / SVD
       ↓
@@ -80,17 +84,124 @@ A=D^{-1/2}A_0D^{-1/2}.
 This separates ordinary molecular variance from spatial covariance and reduces
 sensitivity to local cell density.
 
-## Three explicit objectives
+## Geometry-standardised pair statistics
+
+Tanpopo now separates **what is measured between cells** from **how tissue geometry
+determines which cell pairs are available**. The base Wendland adjacency remains
+zero-diagonal. Before expression enters the model, the adjacency can be standardised
+across biological samples and then interpreted in one of two ways.
+
+### `--spatial-statistic mark_correlation` — default
+
+For residual expression `Y` and a pair-weight adjacency `A`, Tanpopo uses
+
+\[
+G_s = Y_s^T A_s Y_s.
+\]
+
+Despite the CLI name, this is a matrix-valued, pair-conditioned **mark covariance**
+operator rather than a Pearson correlation matrix. With geometry standardisation and
+`--sample-weighting n_spots`, each biological sample contributes an average weighted
+cross-cell product under a common pair-distance measure.
+
+### `--spatial-statistic variogram`
+
+The same pair weights are converted to the graph Laplacian
+
+\[
+L_s=D_s-A_s.
+\]
+
+Then
+
+\[
+Y_s^T L_s Y_s
+=
+\frac12\sum_{i,j} A_{s,ij}
+(Y_{s,i}-Y_{s,j})(Y_{s,i}-Y_{s,j})^T,
+\]
+
+which is a matrix-valued mark variogram. For a single/shared analysis the largest
+eigenvalues identify gene directions with the greatest local pairwise variation. For a
+differential analysis, the sign of an eigenvalue indicates which sample group has the
+larger variogram along that gene program.
+
+### `--geometry-normalisation`
+
+Three geometry treatments are available for square spatial workflows:
+
+- `none`: preserve the historical graph scale after optional symmetric degree
+  normalisation;
+- `mass`: rescale each sample adjacency so `sum(A_s) = n_s`;
+- `distance` (default): additionally force every sample to have the same weighted
+  pair-distance profile.
+
+For `distance`, `[0, radius]` is divided into `--distance-bins` equal-width shells.
+Let `m_sb` be sample `s`'s total pair weight in shell `b`. Bins not represented in
+every sample are excluded. The common reference `q_b` is the equal-sample mean of
+each sample's normalised shell profile on the common support. Each shell is then
+rescaled so
+
+\[
+\sum_{ij:\ d_{ij}\in B_b} A^*_{s,ij}=n_s q_b.
+\]
+
+Consequently
+
+\[
+\sum_{ij} A^*_{s,ij}=n_s
+\]
+
+in every sample, and the default `1/n_s` sample weighting compares the same
+pair-distance measure across tissues. With only one sample, `distance` reduces exactly
+to total-mass normalisation.
+
+This standardisation changes the **measurement distribution over cell pairs**, not the
+expression values themselves. It therefore does not regress away genuine expression
+gradients associated with boundaries, compartments or other tissue coordinates.
+
+### Optional random-labelling null centering
+
+For mark correlation only, `--null-center` adds the exact finite-sample correction for
+permuting sample-centred residual marks over the fixed point pattern. If `S_s=sum(A_s)`
+and `n_s` cells are present,
+
+\[
+E_\pi[Y_\pi^T A_sY_\pi]
+=-\frac{S_s}{n_s(n_s-1)}Y^TY.
+\]
+
+Tanpopo therefore adds `S_s / (n_s(n_s-1))` times the identity to the spatial
+operator. This diagonal is an analytical null correction, not a biological self-edge.
+`--null-center` requires sample- or label-centred expression and is not defined for
+the variogram statistic.
+
+Geometry diagnostics (pair mass, weighted-degree CV, weighted distance quantiles, and
+when applicable the shell masses/reference weights) are stored under the analysis
+metadata in `uns['tanpopo']`. Classical observation-window edge corrections are not
+implemented because Tanpopo currently receives cell coordinates but not a reliable
+tissue observation window/mask.
+
+## Three explicit gene-space objectives
 
 ### `covariance` — default
 
+This historical objective name now means the **unstandardised gene-space pair
+statistic**. For mark correlation,
+
 \[
-\max_v v^T Y^T A Y v.
+\max_v v^T Y^T A Y v,
 \]
 
-Finds molecular programs accounting for the largest positive cross-cell spatial
-covariance. This is the principal Tanpopo objective and the one most directly supported
-by the current within-cell-type simulations.
+so it finds directions with large positive cross-cell covariance. For variogram, the
+same objective maximises
+
+\[
+\max_v v^T Y^T L Y v,
+\]
+
+so it finds directions with large local pairwise variation. The CLI name is retained
+for backwards compatibility with the existing objective API.
 
 ### `gene_standardized`
 
@@ -100,7 +211,7 @@ spatial covariance is computed:
 \[
 D_0 = \operatorname{diag}(Y^T Y),
 \qquad
-D_0^{-1/2}Y^TAYD_0^{-1/2}.
+D_0^{-1/2}Y^T K_{stat}YD_0^{-1/2},
 \]
 
 This replaces the old `alpha=1` path. The denominator is positive ordinary expression
@@ -111,8 +222,10 @@ variance; spatial autocovariance is never treated as a variance.
 Tanpopo solves the generalized spatial-gain problem on a truncated expression subspace:
 
 \[
-Y^TAYv = \lambda(Y^TY + \tau I)v.
+Y^T K_{stat}Yv = \lambda(Y^TY + \tau I)v,
 \]
+
+where `K_stat` is the mark-correlation adjacency or variogram Laplacian.
 
 It is implemented through a truncated SVD of the projected expression matrix rather
 than inversion of a large gene covariance matrix. This objective asks which molecular
@@ -177,6 +290,9 @@ tanpopo differential-sample-programs \
   --labels Fibroblasts \
   --radius 20 \
   --components 8 \
+  --spatial-statistic mark_correlation \
+  --geometry-normalisation distance \
+  --distance-bins 10 \
   --permutations 1000
 ```
 
@@ -184,6 +300,24 @@ The contrast is a difference of biological-sample spatial operators. Positive an
 negative eigenvalues identify structure enriched on opposite sides of the contrast.
 Optional sample-label permutations use the maximum absolute eigenvalue to provide
 two-sided family-wise corrected mode p-values.
+
+To compare local expression roughness rather than cross-cell covariance, use for
+example:
+
+```bash
+tanpopo differential-sample-programs \
+  -ia groupA_1.h5ad -ia groupA_2.h5ad \
+  -ib groupB_1.h5ad -ib groupB_2.h5ad \
+  --radius 20 \
+  --spatial-statistic variogram \
+  --geometry-normalisation distance \
+  --distance-bins 10
+```
+
+If a common physical `--radius` is omitted in a multi-sample analysis, Tanpopo now
+uses `3.5 x` the **median** of the sample-wise mean nearest-neighbour spacings rather
+than deriving the radius from the first sample. An explicit physical radius is still
+strongly preferred for cross-tissue interpretation.
 
 ### 4. Paired target-neighbour programs
 
@@ -216,7 +350,9 @@ Outputs:
 - `uns['tanpopo'][<id>]['singular_values']`
 
 The bipartite graph uses the same Wendland kernel with row/column degree
-normalisation.
+normalisation. `cross-programs` and `shared-cross-programs` remain cross-covariance
+methods: the square-graph mark-variogram and geometry-standardisation options are not
+applied to rectangular target-neighbour operators.
 
 ### 5. Shared target-neighbour programs across samples
 
@@ -287,17 +423,22 @@ Y=B+W
 \]
 
 where `B` is the between-label mean component and `W` is the within-label residual.
-The spatial covariance then decomposes exactly:
+For either the mark-correlation adjacency or variogram Laplacian, write the chosen
+spatial operator as `K_stat`. The statistic decomposes exactly:
 
 \[
-Y^TAY
+Y^T K_{stat}Y
 =
-B^TAB
+B^T K_{stat}B
 +
-W^TAW
+W^T K_{stat}W
 +
-B^TAW + W^TAB.
+B^T K_{stat}W + W^T K_{stat}B.
 \]
+
+`label-decomposition` accepts the same `--spatial-statistic`,
+`--geometry-normalisation`, `--distance-bins`, and `--null-center` options as the
+other square-graph workflows.
 
 Tanpopo stores programs for `total`, `between`, `within`, and `coupling`, together
 with a numerical operator-additivity error in `uns`.
@@ -310,7 +451,9 @@ The existing Tanpopo naming pattern is retained where possible. For
 ```text
 varm['tanpopo_spatial_gene_loadings']
 varm['tanpopo_spatial_gene_scores']
-var ['tanpopo_spatial_gene_spatial_covariance']
+var ['tanpopo_spatial_gene_spatial_statistic']
+var ['tanpopo_spatial_gene_spatial_covariance']  # mark_correlation compatibility key
+var ['tanpopo_spatial_gene_mark_variogram']       # variogram-specific key
 obsm['tanpopo_spatial_spot_modes']
 uns ['tanpopo']['spatial']['eigenvalues']
 ```
@@ -378,6 +521,9 @@ from tanpopo import SpatialProgramModel
 model = SpatialProgramModel(
     radius=20,
     objective="covariance",
+    spatial_statistic="mark_correlation",  # or "variogram"
+    geometry_normalisation="distance",
+    distance_bins=10,
 ).fit(
     X,
     coords,
@@ -430,7 +576,10 @@ benchmarks should pass:
 3. expression-strength × spatial-strength sweeps;
 4. target-neighbour recovery against NiCo/MISTy/Niche-DE where outputs are comparable;
 5. differential spatial covariance with no differential mean expression;
-6. held-out biological-sample replication.
+6. geometry-invariance simulations with matched conditional mark covariance but
+   different tissue shapes/densities;
+7. covariance-versus-variogram consistency and scale-specific simulations;
+8. held-out biological-sample replication.
 
 The package should not grow back into a general spatial-transcriptomics toolbox until
 those tests establish that these conditional operators add information beyond existing

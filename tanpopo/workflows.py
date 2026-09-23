@@ -12,9 +12,11 @@ from tanpopo.io import (
     concat_adata_samples,
     load_preprocess_sample,
     load_preprocess_samples,
+    geometry_diagnostics_cfg,
     model_cfg,
     preprocess_cfg,
     store_cross_result,
+    store_multi_sample_result,
     store_sample_result,
     store_shared_cross_result,
 )
@@ -33,8 +35,8 @@ from tanpopo.utils import as_value, pd_dtype
 app = typer.Typer(
     name="tanpopo",
     help=(
-        "Conditional spatial covariance programs for spatial transcriptomics. "
-        "Spatial graphs are zero-diagonal by default."
+        "Conditional spatial pair-statistic programs for spatial transcriptomics. "
+        "Base pair graphs are zero-diagonal before optional variogram conversion."
     ),
     no_args_is_help=True,
     context_settings={"help_option_names": ["-h", "--help"]},
@@ -158,6 +160,28 @@ def _radius_from_mask(adata, mask=None):
     return radius
 
 
+def _radius_from_masks(adatas, masks):
+    """Choose one fallback radius without privileging the first biological sample."""
+    spacings = []
+    for adata, mask in zip(adatas, masks):
+        coords = np.asarray(adata.obsm["spatial"])
+        if mask is not None:
+            coords = coords[np.asarray(mask, dtype=bool)]
+        if len(coords) < 2:
+            raise typer.BadParameter(
+                "At least two selected cells are required in every sample to estimate radius"
+            )
+        spacings.append(neighbour_spacing(coords))
+    radius = 3.5 * float(np.median(spacings))
+    typer.echo(
+        "Warning: no --radius specified for a multi-sample analysis; using "
+        f"{radius:.3g} (3.5 x median sample mean nearest-neighbour distance). "
+        "For interpretable cross-tissue comparisons, specify a physical radius explicitly.",
+        err=True,
+    )
+    return radius
+
+
 def _model_kwargs(
     objective, spot_operator, expression_rank, gain_ridge, graph_normalisation, dtype, verbose
 ):
@@ -186,6 +210,10 @@ def spatial_programs(
     expression_rank: ExpressionRank = 50,
     gain_ridge: GainRidge = 1e-8,
     graph_normalisation: GraphNormalisation = GraphNormalisationTypes.symmetric,
+    spatial_statistic: SpatialStatistic = SpatialStatisticTypes.mark_correlation,
+    geometry_normalisation: GeometryNormalisation = GeometryNormalisationTypes.distance,
+    distance_bins: DistanceBins = 10,
+    null_center: NullCenter = False,
     spot_operator: SpotOperator = SpotOperatorTypes.sample,
     alpha: Alpha = None,
     include: Include = None,
@@ -229,6 +257,10 @@ def spatial_programs(
             expression_rank=expression_rank,
             gain_ridge=gain_ridge,
             graph_normalisation=as_value(graph_normalisation),
+            spatial_statistic=as_value(spatial_statistic),
+            geometry_normalisation=as_value(geometry_normalisation),
+            distance_bins=distance_bins,
+            null_center=null_center,
             dtype=as_value(dtype),
             verbose=verbose,
         ).fit(W, coords, n_components, labels=labels, covariates=cov, masks=mask)
@@ -239,7 +271,10 @@ def spatial_programs(
             cmd_id,
             pre,
             model_cfg(model),
-            {"conditioned_label": None if target is None else str(target)},
+            {
+                "conditioned_label": None if target is None else str(target),
+                "geometry_diagnostics": geometry_diagnostics_cfg(model),
+            },
         )
     if output is not None:
         adata.write_h5ad(output)
@@ -261,6 +296,10 @@ def shared_programs(
     expression_rank: ExpressionRank = 50,
     gain_ridge: GainRidge = 1e-8,
     graph_normalisation: GraphNormalisation = GraphNormalisationTypes.symmetric,
+    spatial_statistic: SpatialStatistic = SpatialStatisticTypes.mark_correlation,
+    geometry_normalisation: GeometryNormalisation = GeometryNormalisationTypes.distance,
+    distance_bins: DistanceBins = 10,
+    null_center: NullCenter = False,
     spot_operator: SpotOperator = SpotOperatorTypes.sample,
     sample_weighting: SampleWeighting = SampleWeightingTypes.n_spots,
     alpha: Alpha = None,
@@ -304,7 +343,7 @@ def shared_programs(
     if as_value(spot_operator) != "label":
         labels = None
     if radius is None:
-        radius = _radius_from_mask(adatas[0], masks[0])
+        radius = _radius_from_masks(adatas, masks)
     model = SharedSpatialProgramModel(
         radius,
         objective=objective_value,
@@ -313,20 +352,16 @@ def shared_programs(
         expression_rank=expression_rank,
         gain_ridge=gain_ridge,
         graph_normalisation=as_value(graph_normalisation),
+        spatial_statistic=as_value(spatial_statistic),
+        geometry_normalisation=as_value(geometry_normalisation),
+        distance_bins=distance_bins,
+        null_center=null_center,
         dtype=as_value(dtype),
         verbose=verbose,
     ).fit(W, coords, n_components, labels=labels, covariates=covs, masks=masks)
 
     key = "" if target is None else f"_{str(target).replace(' ', '_')}"
-    prefix = f"tanpopo_{cmd_id}{key}"
-    for i, adata in enumerate(adatas):
-        full = np.full((adata.n_obs, model.spot_modes[i].shape[1]), np.nan)
-        full[model.samples[i].obs_idx] = model.spot_modes[i]
-        adata.obsm[f"{prefix}_spot_modes"] = full
-    combined = concat_adata_samples(adatas, sample_names)
-    combined.varm[f"{prefix}_gene_loadings"] = model.gene_loadings
-    combined.varm[f"{prefix}_gene_scores"] = model.gene_scores
-    combined.var[f"{prefix}_gene_spatial_covariance"] = model.gene_spatial_scores()
+    combined = store_multi_sample_result(adatas, sample_names, model, cmd_id, key)
     add_metadata(
         combined,
         cmd_id,
@@ -336,9 +371,9 @@ def shared_programs(
             "sample_names": sample_names,
             "sample_coefficients": model.sample_coefficients_,
             "conditioned_label": None if target is None else str(target),
+            "geometry_diagnostics": geometry_diagnostics_cfg(model, sample_names),
         },
     )
-    combined.uns["tanpopo"][cmd_id][f"eigenvalues{key}"] = model.eigenvalues
     if output is not None:
         combined.write_h5ad(output)
     return combined
@@ -360,6 +395,10 @@ def differential_sample_programs(
     expression_rank: ExpressionRank = 50,
     gain_ridge: GainRidge = 1e-8,
     graph_normalisation: GraphNormalisation = GraphNormalisationTypes.symmetric,
+    spatial_statistic: SpatialStatistic = SpatialStatisticTypes.mark_correlation,
+    geometry_normalisation: GeometryNormalisation = GeometryNormalisationTypes.distance,
+    distance_bins: DistanceBins = 10,
+    null_center: NullCenter = False,
     spot_operator: SpotOperator = SpotOperatorTypes.sample,
     sample_weighting: SampleWeighting = SampleWeightingTypes.n_spots,
     alpha: Alpha = None,
@@ -375,7 +414,7 @@ def differential_sample_programs(
     dtype: Dtype = Dtypes.float64,
     verbose: Verbose = False,
 ):
-    """Spatial programs whose covariance differs between biological sample groups."""
+    """Spatial programs whose pair statistic differs between biological sample groups."""
     if not fnames_a or not fnames_b:
         raise typer.BadParameter("At least one sample is required in each group")
     fnames = list(fnames_a) + list(fnames_b)
@@ -405,7 +444,7 @@ def differential_sample_programs(
     if as_value(spot_operator) != "label":
         labels = None
     if radius is None:
-        radius = _radius_from_mask(adatas[0], masks[0])
+        radius = _radius_from_masks(adatas, masks)
     n_a = len(fnames_a)
     model = DifferentialSpatialProgramModel(
         radius,
@@ -417,21 +456,17 @@ def differential_sample_programs(
         expression_rank=expression_rank,
         gain_ridge=gain_ridge,
         graph_normalisation=as_value(graph_normalisation),
+        spatial_statistic=as_value(spatial_statistic),
+        geometry_normalisation=as_value(geometry_normalisation),
+        distance_bins=distance_bins,
+        null_center=null_center,
         dtype=as_value(dtype),
         verbose=verbose,
     ).fit(W, coords, n_components, labels=labels, covariates=covs, masks=masks)
     if permutations:
         model.permutation_test(permutations, seed=seed)
     key = "" if target is None else f"_{str(target).replace(' ', '_')}"
-    prefix = f"tanpopo_{cmd_id}{key}"
-    for i, adata in enumerate(adatas):
-        full = np.full((adata.n_obs, model.spot_modes[i].shape[1]), np.nan)
-        full[model.samples[i].obs_idx] = model.spot_modes[i]
-        adata.obsm[f"{prefix}_spot_modes"] = full
-    combined = concat_adata_samples(adatas, sample_names)
-    combined.varm[f"{prefix}_gene_loadings"] = model.gene_loadings
-    combined.varm[f"{prefix}_gene_scores"] = model.gene_scores
-    combined.var[f"{prefix}_gene_spatial_covariance"] = model.gene_spatial_scores()
+    combined = store_multi_sample_result(adatas, sample_names, model, cmd_id, key)
     add_metadata(
         combined,
         cmd_id,
@@ -444,9 +479,9 @@ def differential_sample_programs(
             "sample_coefficients": model.sample_coefficients_,
             "conditioned_label": None if target is None else str(target),
             "permutations": int(permutations),
+            "geometry_diagnostics": geometry_diagnostics_cfg(model, sample_names),
         },
     )
-    combined.uns["tanpopo"][cmd_id][f"eigenvalues{key}"] = model.eigenvalues
     if permutations:
         combined.uns["tanpopo"][cmd_id][f"permutation_pvalues{key}"] = model.permutation_pvalues_
         combined.uns["tanpopo"][cmd_id][
@@ -467,6 +502,10 @@ def label_decomposition(
     n_components: Components = 8,
     layer: Layer = None,
     graph_normalisation: GraphNormalisation = GraphNormalisationTypes.symmetric,
+    spatial_statistic: SpatialStatistic = SpatialStatisticTypes.mark_correlation,
+    geometry_normalisation: GeometryNormalisation = GeometryNormalisationTypes.distance,
+    distance_bins: DistanceBins = 10,
+    null_center: NullCenter = False,
     include: Include = None,
     exclude: Exclude = None,
     transform: Transform = None,
@@ -477,7 +516,7 @@ def label_decomposition(
     dtype: Dtype = Dtypes.float64,
     verbose: Verbose = False,
 ):
-    """Decompose total spatial covariance into between-label, within-label and coupling terms."""
+    """Decompose a spatial pair statistic into between-label, within-label and coupling terms."""
     pre = _pre_args(
         target_sum,
         transform,
@@ -497,6 +536,10 @@ def label_decomposition(
     model = LabelDecompositionModel(
         radius,
         graph_normalisation=as_value(graph_normalisation),
+        spatial_statistic=as_value(spatial_statistic),
+        geometry_normalisation=as_value(geometry_normalisation),
+        distance_bins=distance_bins,
+        null_center=null_center,
         dtype=as_value(dtype),
         verbose=verbose,
     ).fit(W, coords, np.asarray(adata.obs[label_key]), n_components, covariates=cov)
@@ -515,9 +558,17 @@ def label_decomposition(
         {
             "radius": radius,
             "graph_normalisation": as_value(graph_normalisation),
+            "spatial_statistic": as_value(spatial_statistic),
+            "geometry_normalisation": as_value(geometry_normalisation),
+            "distance_bins": distance_bins,
+            "null_center": null_center,
             "decomposition": "total = between + within + coupling",
         },
-        {"label_key": label_key, "operator_additivity_error": model.operator_additivity_error()},
+        {
+            "label_key": label_key,
+            "operator_additivity_error": model.operator_additivity_error(),
+            "geometry_diagnostics": geometry_diagnostics_cfg(model),
+        },
     )
     if output is not None:
         adata.write_h5ad(output)
@@ -583,7 +634,11 @@ def shared_cross_programs(
         neighbour_masks.append(adata.obs[label_key].isin(neighbours).to_numpy())
 
     if radius is None:
-        radius = _radius_from_mask(adatas[0], target_masks[0] | neighbour_masks[0])
+        union_masks = [
+            target | neighbour
+            for target, neighbour in zip(target_masks, neighbour_masks)
+        ]
+        radius = _radius_from_masks(adatas, union_masks)
     model = SharedCrossSpatialProgramModel(
         radius,
         objective=as_value(objective),

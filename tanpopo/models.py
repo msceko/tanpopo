@@ -12,6 +12,7 @@ from tanpopo.data import (
     prepare_cross_samples,
     prepare_samples,
 )
+from tanpopo.kernel import VALID_GEOMETRY_NORMALISATIONS, VALID_SPATIAL_STATISTICS
 from tanpopo.operators import (
     BetweenLabelTransform,
     BilinearGeneOperator,
@@ -23,7 +24,7 @@ from tanpopo.operators import (
     WithinLabelTransform,
     expression_scale_from_variance,
     gene_expression_variance,
-    gene_spatial_covariance_diag,
+    gene_spatial_statistic_diag,
     projected_svd,
 )
 from tanpopo.projection import SpotProjector
@@ -41,10 +42,26 @@ def _sample_weights(samples, mode):
     raise ValueError("sample_weighting must be 'none' or 'n_spots'")
 
 
-def _weighted_block_kernel(samples, weights, signs=None):
+def _sample_statistic_kernel(sample, null_center=False):
+    K = sample.K
+    if not null_center:
+        return K
+    if sample.n_spots < 2:
+        raise ValueError("null centering requires at least two spots per sample")
+    pair_mass = float(sample.geometry_diagnostics["pair_mass"])
+    correction = pair_mass / (sample.n_spots * (sample.n_spots - 1))
+    # This diagonal is an analytical random-labelling correction, not a self-edge:
+    # for sample-centred marks E_pi[Y_pi^T A Y_pi] = -correction * Y^T Y.
+    return (K + correction * sp.eye(sample.n_spots, format="csr", dtype=K.dtype)).tocsr()
+
+
+def _weighted_block_kernel(samples, weights, signs=None, null_center=False):
     signs = np.ones(len(samples)) if signs is None else np.asarray(signs, dtype=float)
     return sp.block_diag(
-        [float(w * sign) * s.K for s, w, sign in zip(samples, weights, signs)],
+        [
+            float(w * sign) * _sample_statistic_kernel(s, null_center=null_center)
+            for s, w, sign in zip(samples, weights, signs)
+        ],
         format="csr",
     )
 
@@ -138,12 +155,19 @@ def _solve_dense(H, n_components, signed=False):
 
 
 class SpatialProgramModel:
-    """Conditional spatial gene programs.
+    """Conditional multigene programs from a spatial pair statistic.
+
+    ``spatial_statistic='mark_correlation'`` uses weighted cross-cell products,
+    while ``'variogram'`` uses weighted pairwise squared differences through the
+    corresponding graph Laplacian. Geometry normalisation is performed before
+    either statistic reaches the gene-space eigensolver.
 
     Objectives
     ----------
     covariance
-        Maximise cross-cell spatial covariance, v^T Y^T A Y v.
+        Historical name for the unstandardised gene-space statistic. For mark
+        correlation this maximises v^T Y^T A Y v; for variogram it maximises
+        v^T Y^T L Y v.
     gene_standardized
         The same numerator after scaling each gene by ordinary residual expression
         variance. Unlike the historical alpha=1 path, the denominator is positive
@@ -162,6 +186,10 @@ class SpatialProgramModel:
         expression_rank=50,
         gain_ridge=1e-8,
         graph_normalisation="symmetric",
+        spatial_statistic="mark_correlation",
+        geometry_normalisation="distance",
+        distance_bins=10,
+        null_center=False,
         covariates_tol=1e-10,
         block_size=256,
         dtype=np.float64,
@@ -169,6 +197,23 @@ class SpatialProgramModel:
     ):
         if objective not in VALID_OBJECTIVES:
             raise ValueError(f"objective must be one of {sorted(VALID_OBJECTIVES)}")
+        if spatial_statistic not in VALID_SPATIAL_STATISTICS:
+            raise ValueError(
+                f"spatial_statistic must be one of {sorted(VALID_SPATIAL_STATISTICS)}"
+            )
+        if geometry_normalisation not in VALID_GEOMETRY_NORMALISATIONS:
+            raise ValueError(
+                "geometry_normalisation must be one of "
+                f"{sorted(VALID_GEOMETRY_NORMALISATIONS)}"
+            )
+        if int(distance_bins) < 1:
+            raise ValueError("distance_bins must be positive")
+        if null_center and spatial_statistic != "mark_correlation":
+            raise ValueError(
+                "null_center is only defined for spatial_statistic='mark_correlation'"
+            )
+        if null_center and spot_operator == "none":
+            raise ValueError("null_center requires sample- or label-centred expression")
         self.radius = float(radius)
         self.objective = objective
         self.spot_operator = spot_operator
@@ -176,6 +221,10 @@ class SpatialProgramModel:
         self.expression_rank = int(expression_rank)
         self.gain_ridge = float(gain_ridge)
         self.graph_normalisation = graph_normalisation
+        self.spatial_statistic = spatial_statistic
+        self.geometry_normalisation = geometry_normalisation
+        self.distance_bins = int(distance_bins)
+        self.null_center = bool(null_center)
         self.covariates_tol = covariates_tol
         self.block_size = block_size
         self.dtype = np.dtype(dtype)
@@ -203,7 +252,11 @@ class SpatialProgramModel:
                 masks=masks,
                 dtype=self.dtype,
                 graph_normalisation=self.graph_normalisation,
+                spatial_statistic=self.spatial_statistic,
+                geometry_normalisation=self.geometry_normalisation,
+                distance_bins=self.distance_bins,
             )
+        self.geometry_diagnostics_ = [sample.geometry_diagnostics for sample in self.samples]
         if signs is not None and len(signs) != len(self.samples):
             raise ValueError("signs must contain one value per sample")
         signed = signs is not None and np.any(np.asarray(signs) < 0)
@@ -223,7 +276,9 @@ class SpatialProgramModel:
     def _concatenated_state(self, signs=None):
         Wc, _, sample_groups, label_groups, covc = concatenate_samples(self.samples)
         weights = _sample_weights(self.samples, self.sample_weighting)
-        K = _weighted_block_kernel(self.samples, weights, signs=signs)
+        K = _weighted_block_kernel(
+            self.samples, weights, signs=signs, null_center=self.null_center
+        )
         spec = SpotOperatorSpec(self.spot_operator)
         S = spec.build(
             K,
@@ -262,7 +317,7 @@ class SpatialProgramModel:
         self.gene_loadings = loadings
         self.spot_modes = _split_spot_modes(phi, self.samples)
         self.gene_scores = loadings * np.sqrt(np.maximum(np.abs(vals), 1e-12))[None, :]
-        self.gene_spatial_scores_ = gene_spatial_covariance_diag(
+        self.gene_spatial_scores_ = gene_spatial_statistic_diag(
             Wc, S, block_size=self.block_size
         )
         self.sample_coefficients_ = weights * (
@@ -272,7 +327,10 @@ class SpatialProgramModel:
     def _fit_gain(self, n_components, signs, signed, tol):
         Wc, _, sample_groups, label_groups, covc = concatenate_samples(self.samples)
         weights = _sample_weights(self.samples, self.sample_weighting)
-        base_K = sp.block_diag([s.K for s in self.samples], format="csr")
+        base_K = sp.block_diag(
+            [_sample_statistic_kernel(s, null_center=self.null_center) for s in self.samples],
+            format="csr",
+        )
         spec = SpotOperatorSpec(self.spot_operator)
         S_base = spec.build(
             base_K,
@@ -296,11 +354,20 @@ class SpatialProgramModel:
         denom = np.sqrt(np.square(singular) + ridge)
         gain_scale = np.divide(singular, denom, out=np.zeros_like(singular), where=denom > 0)
 
-        signs_array = np.ones(len(self.samples)) if signs is None else np.asarray(signs, dtype=float)
+        signs_array = (
+            np.ones(len(self.samples))
+            if signs is None
+            else np.asarray(signs, dtype=float)
+        )
         # In weighted expression coordinates the base sample weights cancel, leaving
         # only the sign/contrast coefficient in the compressed spatial numerator.
         K_signed = sp.block_diag(
-            [float(sign) * s.K for s, sign in zip(self.samples, signs_array)], format="csr"
+            [
+                float(sign)
+                * _sample_statistic_kernel(s, null_center=self.null_center)
+                for s, sign in zip(self.samples, signs_array)
+            ],
+            format="csr",
         )
         S_signed = spec.build(
             K_signed,
@@ -323,8 +390,8 @@ class SpatialProgramModel:
         self.gene_loadings = loadings
         self.spot_modes = _split_spot_modes(phi, self.samples)
         self.gene_scores = loadings * np.sqrt(np.maximum(np.abs(vals), 1e-12))[None, :]
-        # Report unweighted raw spatial autocovariance per gene for diagnostics.
-        self.gene_spatial_scores_ = gene_spatial_covariance_diag(
+        # Report the unweighted spatial statistic per gene for diagnostics.
+        self.gene_spatial_scores_ = gene_spatial_statistic_diag(
             Wc, S_base, block_size=self.block_size
         )
         self.expression_singular_values_ = singular
@@ -397,6 +464,10 @@ class DifferentialSpatialProgramModel(SpatialProgramModel):
                 expression_rank=self.expression_rank,
                 gain_ridge=self.gain_ridge,
                 graph_normalisation=self.graph_normalisation,
+                spatial_statistic=self.spatial_statistic,
+                geometry_normalisation=self.geometry_normalisation,
+                distance_bins=self.distance_bins,
+                null_center=self.null_center,
                 covariates_tol=self.covariates_tol,
                 block_size=self.block_size,
                 dtype=self.dtype,
@@ -672,7 +743,7 @@ class CrossSpatialProgramModel(_CrossSpatialProgramBase):
 
 
 class LabelDecompositionModel:
-    """Exact decomposition of sample-centered spatial covariance by label structure.
+    """Exact decomposition of a sample-centred spatial statistic by label structure.
 
     Let Y be the commonly sample-centered/covariate-residualized expression,
     W the within-label residual, and B = Y - W the between-label mean component.
@@ -690,12 +761,35 @@ class LabelDecompositionModel:
         self,
         radius,
         graph_normalisation="symmetric",
+        spatial_statistic="mark_correlation",
+        geometry_normalisation="distance",
+        distance_bins=10,
+        null_center=False,
         covariates_tol=1e-10,
         dtype=np.float64,
         verbose=False,
     ):
+        if spatial_statistic not in VALID_SPATIAL_STATISTICS:
+            raise ValueError(
+                f"spatial_statistic must be one of {sorted(VALID_SPATIAL_STATISTICS)}"
+            )
+        if geometry_normalisation not in VALID_GEOMETRY_NORMALISATIONS:
+            raise ValueError(
+                "geometry_normalisation must be one of "
+                f"{sorted(VALID_GEOMETRY_NORMALISATIONS)}"
+            )
+        if int(distance_bins) < 1:
+            raise ValueError("distance_bins must be positive")
+        if null_center and spatial_statistic != "mark_correlation":
+            raise ValueError(
+                "null_center is only defined for spatial_statistic='mark_correlation'"
+            )
         self.radius = float(radius)
         self.graph_normalisation = graph_normalisation
+        self.spatial_statistic = spatial_statistic
+        self.geometry_normalisation = geometry_normalisation
+        self.distance_bins = int(distance_bins)
+        self.null_center = bool(null_center)
         self.covariates_tol = covariates_tol
         self.dtype = np.dtype(dtype)
         self.verbose = verbose
@@ -709,11 +803,16 @@ class LabelDecompositionModel:
             covariates=covariates,
             dtype=self.dtype,
             graph_normalisation=self.graph_normalisation,
+            spatial_statistic=self.spatial_statistic,
+            geometry_normalisation=self.geometry_normalisation,
+            distance_bins=self.distance_bins,
         )
         if len(samples) != 1:
             raise ValueError("LabelDecompositionModel currently operates on one sample")
         self.samples = samples
         sample = samples[0]
+        self.geometry_diagnostics_ = [sample.geometry_diagnostics]
+        K = _sample_statistic_kernel(sample, null_center=self.null_center)
         base_projector = SpotProjector(
             sample.n_spots,
             groups=Groups.single(sample.n_spots),
@@ -726,12 +825,12 @@ class LabelDecompositionModel:
         between_t = BetweenLabelTransform(base_projector, within_t)
 
         ops = {
-            "total": BilinearGeneOperator(sample.W, sample.K, total_t, dtype=self.dtype),
-            "between": BilinearGeneOperator(sample.W, sample.K, between_t, dtype=self.dtype),
-            "within": BilinearGeneOperator(sample.W, sample.K, within_t, dtype=self.dtype),
+            "total": BilinearGeneOperator(sample.W, K, total_t, dtype=self.dtype),
+            "between": BilinearGeneOperator(sample.W, K, between_t, dtype=self.dtype),
+            "within": BilinearGeneOperator(sample.W, K, within_t, dtype=self.dtype),
             "coupling": BilinearGeneOperator(
                 sample.W,
-                sample.K,
+                K,
                 between_t,
                 right_transform=within_t,
                 symmetric_pair=True,
@@ -762,6 +861,7 @@ class LabelDecompositionModel:
     def operator_additivity_error(self, vectors=None):
         """Numerically verify total = between + within + coupling."""
         sample = self.samples[0]
+        K = _sample_statistic_kernel(sample, null_center=self.null_center)
         base = SpotProjector(
             sample.n_spots,
             groups=Groups.single(sample.n_spots),
@@ -771,11 +871,11 @@ class LabelDecompositionModel:
         )
         within = WithinLabelTransform(base, sample.labels_groups, self.dtype)
         between = BetweenLabelTransform(base, within)
-        total_op = BilinearGeneOperator(sample.W, sample.K, ProjectorTransform(base), dtype=self.dtype)
-        between_op = BilinearGeneOperator(sample.W, sample.K, between, dtype=self.dtype)
-        within_op = BilinearGeneOperator(sample.W, sample.K, within, dtype=self.dtype)
+        total_op = BilinearGeneOperator(sample.W, K, ProjectorTransform(base), dtype=self.dtype)
+        between_op = BilinearGeneOperator(sample.W, K, between, dtype=self.dtype)
+        within_op = BilinearGeneOperator(sample.W, K, within, dtype=self.dtype)
         coupling_op = BilinearGeneOperator(
-            sample.W, sample.K, between, within, symmetric_pair=True, dtype=self.dtype
+            sample.W, K, between, within, symmetric_pair=True, dtype=self.dtype
         )
         if vectors is None:
             rng = np.random.default_rng(0)

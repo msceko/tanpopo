@@ -11,7 +11,11 @@ from tanpopo.projection import SpotProjector
 
 
 class ProjectedKernel:
-    """Projected zero-diagonal spatial operator S = P^T A P."""
+    """Projected spatial operator S = P^T K P.
+
+    ``K`` is zero-diagonal for mark correlation and a graph Laplacian for the
+    variogram statistic.
+    """
 
     def __init__(self, K, projector, dtype=np.float64):
         self.K = K.tocsr().astype(dtype, copy=False)
@@ -76,8 +80,8 @@ def gene_expression_variance(W, projector, block_size=256, eps=0.0):
     return np.maximum(diag, eps)
 
 
-def gene_spatial_covariance_diag(W, S, block_size=256):
-    """diag(W^T P^T A P W), without clipping negative values."""
+def gene_spatial_statistic_diag(W, S, block_size=256):
+    """diag(W^T P^T K P W), without clipping negative values."""
     W = W.tocsr() if sp.issparse(W) else sp.csr_matrix(W)
     if block_size is None:
         block_size = min(256, W.shape[1])
@@ -90,17 +94,22 @@ def gene_spatial_covariance_diag(W, S, block_size=256):
     return diag
 
 
+
+# Backward-compatible internal name used by older callers.
+gene_spatial_covariance_diag = gene_spatial_statistic_diag
+
 def expression_scale_from_variance(variance, eps=1e-12):
     variance = np.asarray(variance, dtype=float)
     return np.maximum(variance, eps) ** -0.5
 
 
 class GeneKernel:
-    """Gene-space spatial covariance operator.
+    """Gene-space projected spatial-statistic operator.
 
-    With ``gene_scale=None`` this is G = W^T P^T A P W.
-    With a positive expression-derived scale D^-1/2 it is the gene-standardized
-    form D^-1/2 G D^-1/2. Spatial autocovariance is never used as a denominator.
+    With ``gene_scale=None`` this is G = W^T P^T K P W, where K is either the
+    mark-correlation adjacency or the mark-variogram Laplacian. With a positive
+    expression-derived scale D^-1/2 it is the gene-standardized form
+    D^-1/2 G D^-1/2.
     """
 
     def __init__(self, W, S, gene_scale=None, dtype=np.float64):

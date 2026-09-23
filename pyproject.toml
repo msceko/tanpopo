@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tanpopo"
 version = "0.2.0"
-description = "Conditional spatial covariance programs for spatial transcriptomics"
+description = "Geometry-standardised spatial pair-statistic programs for spatial transcriptomics"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "GPL-3.0-or-later" }

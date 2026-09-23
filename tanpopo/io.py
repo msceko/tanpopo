@@ -77,6 +77,10 @@ def model_cfg(model):
         "expression_rank",
         "gain_ridge",
         "graph_normalisation",
+        "spatial_statistic",
+        "geometry_normalisation",
+        "distance_bins",
+        "null_center",
     )
     return {key: getattr(model, key) for key in keys if hasattr(model, key)}
 
@@ -86,7 +90,7 @@ def add_metadata(adata, cmd_id, preprocessing, model, extra=None):
     metadata = {
         "preprocessing": preprocessing,
         "model": model,
-        "tanpopo_scope": "conditional_spatial_covariance",
+        "tanpopo_scope": "conditional_spatial_pair_statistics",
     }
     if extra:
         metadata.update(extra)
@@ -97,6 +101,27 @@ def full_mode(mode, obs_idx, n_obs):
     out = np.full((n_obs, mode.shape[1]), np.nan, dtype=float)
     out[np.asarray(obs_idx, dtype=int)] = mode
     return out
+
+
+def _store_gene_spatial_statistic(adata, prefix, model):
+    values = model.gene_spatial_scores()
+    adata.var[f"{prefix}_gene_spatial_statistic"] = values
+    # Retain the historical covariance key for mark correlation and provide an
+    # explicit variogram key for the alternative pair statistic.
+    if getattr(model, "spatial_statistic", "mark_correlation") == "mark_correlation":
+        adata.var[f"{prefix}_gene_spatial_covariance"] = values
+    else:
+        adata.var[f"{prefix}_gene_mark_variogram"] = values
+
+
+def geometry_diagnostics_cfg(model, sample_names=None):
+    """Return H5AD-friendly per-sample geometry diagnostics."""
+    diagnostics = getattr(model, "geometry_diagnostics_", None)
+    if diagnostics is None:
+        return None
+    if sample_names is None:
+        sample_names = [f"sample_{i}" for i in range(len(diagnostics))]
+    return {str(name): diag for name, diag in zip(sample_names, diagnostics)}
 
 
 def store_sample_result(adata, model, cmd_id, key="", sample_index=0):
@@ -111,7 +136,7 @@ def store_sample_result(adata, model, cmd_id, key="", sample_index=0):
     # scientifically interpretable key for all objectives.
     if model.eigenvectors.shape[0] == adata.n_vars:
         adata.varm[f"{prefix}_eigenvectors"] = model.eigenvectors
-    adata.var[f"{prefix}_gene_spatial_covariance"] = model.gene_spatial_scores()
+    _store_gene_spatial_statistic(adata, prefix, model)
     adata.uns.setdefault("tanpopo", {}).setdefault(cmd_id, {})
     adata.uns["tanpopo"][cmd_id][f"eigenvalues{key}"] = np.asarray(model.eigenvalues)
 
@@ -139,7 +164,7 @@ def store_multi_sample_result(adatas, sample_names, model, cmd_id, key=""):
     combined = concat_adata_samples(adatas, sample_names)
     combined.varm[f"{prefix}_gene_loadings"] = model.gene_loadings
     combined.varm[f"{prefix}_gene_scores"] = model.gene_scores
-    combined.var[f"{prefix}_gene_spatial_covariance"] = model.gene_spatial_scores()
+    _store_gene_spatial_statistic(combined, prefix, model)
     combined.uns.setdefault("tanpopo", {}).setdefault(cmd_id, {})
     combined.uns["tanpopo"][cmd_id][f"eigenvalues{key}"] = np.asarray(model.eigenvalues)
     combined.uns["tanpopo"][cmd_id][f"sample_coefficients{key}"] = np.asarray(

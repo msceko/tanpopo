@@ -1,5 +1,28 @@
 # Migration notes: Tanpopo 0.1 -> narrowed 0.2
 
+## Geometry-standardised spatial statistics
+
+Square spatial workflows now expose two independent choices:
+
+- `--spatial-statistic mark_correlation|variogram`;
+- `--geometry-normalisation none|mass|distance`.
+
+`distance` is the new default. It reweights distance shells to a shared reference
+profile across biological samples and fixes each sample's total pair mass to its
+number of selected cells. This changes eigenvalue/statistic scales relative to the
+historical raw graph, although single-sample mark-correlation loadings are unchanged
+up to numerical eigensolver variation because one-sample distance normalisation is a
+global graph rescaling. Use `--geometry-normalisation none` to recover the previous
+graph scaling.
+
+The base mark-correlation adjacency remains zero-diagonal. `variogram` converts the
+same pair weights to `L = D - A`; its diagonal is therefore part of the variogram
+operator rather than a restored self-edge.
+
+Multi-sample workflows no longer estimate an omitted radius from the first sample
+only. The fallback is based on the median sample nearest-neighbour spacing; an explicit
+physical radius is recommended for comparative analyses.
+
 ## Preserved structure
 
 - `tanpopo.kernel`: Wendland kernel and neighbour spacing.

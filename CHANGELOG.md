@@ -1,3 +1,15 @@
+# Unreleased
+
+- Added geometry-standardised square spatial operators with `none`, `mass`, and
+  distance-profile normalisation.
+- Added matrix-valued `mark_correlation` and graph-Laplacian `variogram` statistics.
+- Added optional exact random-labelling null centering for centred mark correlation.
+- Multi-sample fallback radius now uses the median sample nearest-neighbour spacing
+  rather than the first sample only.
+- Added pair-geometry diagnostics and generic spatial-statistic output keys.
+- Added numerical tests for geometry balancing, variogram identities, null centering,
+  differential variogram recovery, and variogram label decomposition.
+
 # Changelog
 
 ## 0.2.0
