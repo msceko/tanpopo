@@ -34,6 +34,46 @@ from tanpopo.utils import column_normalize, timed
 VALID_OBJECTIVES = {"covariance", "gene_standardized", "gain"}
 
 
+def _group_contrast_coefficients(n_samples, positive_samples, negative_samples):
+    """Return a difference-of-group-means contrast over biological samples.
+
+    Positive/group-A coefficients sum to +1 and negative/group-B coefficients
+    sum to -1. This keeps the estimand invariant to unequal replicate counts.
+    """
+    n_samples = int(n_samples)
+    positive = np.asarray(list(positive_samples), dtype=int)
+    negative = np.asarray(list(negative_samples), dtype=int)
+    if positive.size == 0 or negative.size == 0:
+        raise ValueError("Both differential groups must contain at least one sample")
+    if np.any(positive < 0) or np.any(positive >= n_samples):
+        raise ValueError("positive_samples contains an out-of-range sample index")
+    if np.any(negative < 0) or np.any(negative >= n_samples):
+        raise ValueError("negative_samples contains an out-of-range sample index")
+    repeated = (
+        len(np.unique(positive)) != len(positive)
+        or len(np.unique(negative)) != len(negative)
+    )
+    if repeated:
+        raise ValueError("Sample indices must not be repeated within a differential group")
+    if np.intersect1d(positive, negative).size:
+        raise ValueError("Differential groups must be disjoint")
+    assigned = np.zeros(n_samples, dtype=bool)
+    assigned[positive] = True
+    assigned[negative] = True
+    if not np.all(assigned):
+        raise ValueError("Every sample must be assigned to exactly one differential group")
+    contrast = np.zeros(n_samples, dtype=float)
+    contrast[positive] = 1.0 / positive.size
+    contrast[negative] = -1.0 / negative.size
+    return contrast
+
+
+def _permuted_group_contrast(rng, n_samples, n_positive):
+    positive = rng.choice(n_samples, size=n_positive, replace=False)
+    negative = np.setdiff1d(np.arange(n_samples), positive, assume_unique=True)
+    return _group_contrast_coefficients(n_samples, positive, negative)
+
+
 def _sample_weights(samples, mode):
     if mode == "none":
         return np.ones(len(samples), dtype=float)
@@ -422,11 +462,9 @@ class DifferentialSpatialProgramModel(SpatialProgramModel):
 
     def fit(self, W, coords, n_components, labels=None, covariates=None, masks=None, **kwargs):
         n = len(W) if isinstance(W, (list, tuple)) else 1
-        signs = np.zeros(n, dtype=float)
-        signs[self.positive_samples] = 1.0
-        signs[self.negative_samples] = -1.0
-        if np.any(signs == 0):
-            raise ValueError("Every sample must be assigned to positive or negative group")
+        contrast = _group_contrast_coefficients(
+            n, self.positive_samples, self.negative_samples
+        )
         result = super().fit(
             W,
             coords,
@@ -434,10 +472,11 @@ class DifferentialSpatialProgramModel(SpatialProgramModel):
             labels=labels,
             covariates=covariates,
             masks=masks,
-            signs=signs,
+            signs=contrast,
             **kwargs,
         )
-        self._observed_signs = signs
+        self.contrast_coefficients_ = contrast
+        self._observed_signs = np.sign(contrast)
         return result
 
     def permutation_test(self, n_permutations=100, seed=0, tol=0, maxiter=None):
@@ -453,9 +492,7 @@ class DifferentialSpatialProgramModel(SpatialProgramModel):
         k = len(self.eigenvalues)
         null = np.empty(n_permutations, dtype=float)
         for b in range(n_permutations):
-            positive = rng.choice(n, size=n_positive, replace=False)
-            signs = -np.ones(n, dtype=float)
-            signs[positive] = 1.0
+            contrast = _permuted_group_contrast(rng, n, n_positive)
             tmp = SpatialProgramModel(
                 self.radius,
                 objective=self.objective,
@@ -475,10 +512,10 @@ class DifferentialSpatialProgramModel(SpatialProgramModel):
             )
             tmp.samples = self.samples
             if self.objective == "gain":
-                tmp._fit_gain(k, signs=signs, signed=True, tol=tol)
+                tmp._fit_gain(k, signs=contrast, signed=True, tol=tol)
             else:
                 tmp._fit_covariance(
-                    k, signs=signs, signed=True, tol=tol, maxiter=maxiter
+                    k, signs=contrast, signed=True, tol=tol, maxiter=maxiter
                 )
             null[b] = np.max(np.abs(tmp.eigenvalues))
         observed = np.abs(self.eigenvalues)
@@ -531,19 +568,24 @@ class _CrossSpatialProgramBase:
         self.dtype = np.dtype(dtype)
         self.verbose = verbose
 
-    def _fit_prepared(self, samples, n_components, tol=0):
+    def _fit_prepared(self, samples, n_components, tol=0, contrast=None):
         self.samples = samples
         self.geometry_diagnostics_ = [sample.geometry_diagnostics for sample in samples]
         (
             W_target,
             W_neighbour,
-            K,
             target_groups,
             neighbour_groups,
             cov_target,
             cov_neighbour,
         ) = concatenate_cross_samples(samples)
         weights = _cross_sample_weights(samples, self.sample_weighting)
+        if contrast is None:
+            contrast = np.ones(len(samples), dtype=float)
+        else:
+            contrast = np.asarray(contrast, dtype=float)
+            if contrast.shape != (len(samples),):
+                raise ValueError("contrast must contain one coefficient per sample")
         Pt = SpotProjector(
             W_target.shape[0],
             target_groups,
@@ -561,23 +603,52 @@ class _CrossSpatialProgramBase:
 
         if self.objective == "gain":
             self._fit_gain(
-                W_target, W_neighbour, Pt, Pu, K, samples, weights, n_components, tol
+                W_target,
+                W_neighbour,
+                Pt,
+                Pu,
+                samples,
+                weights,
+                contrast,
+                n_components,
+                tol,
             )
         else:
             self._fit_covariance(
-                W_target, W_neighbour, Pt, Pu, K, samples, weights, n_components, tol
+                W_target,
+                W_neighbour,
+                Pt,
+                Pu,
+                samples,
+                weights,
+                contrast,
+                n_components,
+                tol,
             )
 
         target_phi = Pt.apply(W_target @ self.target_loadings)
         neighbour_phi = Pu.apply(W_neighbour @ self.neighbour_loadings)
         self.target_modes = _split_cross_modes(target_phi, samples, "target")
         self.neighbour_modes = _split_cross_modes(neighbour_phi, samples, "neighbour")
-        self.sample_coefficients_ = weights
+        self.base_sample_weights_ = weights
+        self.contrast_coefficients_ = contrast
+        self.sample_coefficients_ = weights * contrast
         self.sample_mode_covariance_ = self._sample_mode_covariance()
+        self.sample_mode_statistic_ = weights[:, None] * self.sample_mode_covariance_
+        self.aggregate_mode_statistic_ = contrast @ self.sample_mode_statistic_
         return self
 
     def _fit_covariance(
-        self, W_target, W_neighbour, Pt, Pu, K, samples, weights, n_components, tol
+        self,
+        W_target,
+        W_neighbour,
+        Pt,
+        Pu,
+        samples,
+        weights,
+        contrast,
+        n_components,
+        tol,
     ):
         scale_target = scale_neighbour = None
         if self.objective == "gene_standardized":
@@ -597,7 +668,10 @@ class _CrossSpatialProgramBase:
             self.neighbour_gene_expression_variance_ = var_neighbour
 
         K_weighted = sp.block_diag(
-            [float(weight) * sample.K for sample, weight in zip(samples, weights)],
+            [
+                float(weight * coefficient) * sample.K
+                for sample, weight, coefficient in zip(samples, weights, contrast)
+            ],
             format="csr",
         )
         operator = CrossGeneOperator(
@@ -626,7 +700,16 @@ class _CrossSpatialProgramBase:
         )
 
     def _fit_gain(
-        self, W_target, W_neighbour, Pt, Pu, K, samples, weights, n_components, tol
+        self,
+        W_target,
+        W_neighbour,
+        Pt,
+        Pu,
+        samples,
+        weights,
+        contrast,
+        n_components,
+        tol,
     ):
         target_row_scale = _cross_row_scale(samples, weights, "target")
         neighbour_row_scale = _cross_row_scale(samples, weights, "neighbour")
@@ -650,7 +733,14 @@ class _CrossSpatialProgramBase:
         )
         dt = st / np.sqrt(np.square(st) + self.gain_ridge)
         du = su / np.sqrt(np.square(su) + self.gain_ridge)
-        H = dt[:, None] * (Ut.T @ (K @ Uu)) * du[None, :]
+        K_contrast = sp.block_diag(
+            [
+                float(coefficient) * sample.K
+                for sample, coefficient in zip(samples, contrast)
+            ],
+            format="csr",
+        )
+        H = dt[:, None] * (Ut.T @ (K_contrast @ Uu)) * du[None, :]
         left, singular, right_t = svd(H, full_matrices=False)
         k = min(int(n_components), len(singular))
         left, singular, right_t = left[:, :k], singular[:k], right_t[:k]
@@ -718,6 +808,105 @@ class SharedCrossSpatialProgramModel(_CrossSpatialProgramBase):
             )
         with timed("Solving shared cross-program objective", self.verbose):
             return self._fit_prepared(samples, n_components, tol=tol)
+
+
+class DifferentialCrossSpatialProgramModel(_CrossSpatialProgramBase):
+    """Target-neighbour programs whose cross-covariance differs between sample groups.
+
+    The contrast is a difference of group means over geometry-normalised biological
+    sample statistics. Singular values are non-negative; the paired target/neighbour
+    loading orientation is chosen so the fitted group-A minus group-B contrast is
+    positive along each returned pair. Group-specific mode statistics are retained
+    explicitly for interpretation.
+    """
+
+    def __init__(
+        self,
+        radius,
+        positive_samples,
+        negative_samples,
+        *args,
+        sample_weighting="n_spots",
+        **kwargs,
+    ):
+        super().__init__(radius, *args, sample_weighting=sample_weighting, **kwargs)
+        self.positive_samples = list(positive_samples)
+        self.negative_samples = list(negative_samples)
+
+    def fit(
+        self,
+        W,
+        coords,
+        n_components,
+        target_masks,
+        neighbour_masks,
+        covariates=None,
+        tol=0,
+    ):
+        with timed("Preparing differential cross samples", self.verbose):
+            samples = prepare_cross_samples(
+                W,
+                coords,
+                self.radius,
+                target_masks,
+                neighbour_masks,
+                covariates=covariates,
+                dtype=self.dtype,
+                graph_normalisation=self.graph_normalisation,
+                geometry_normalisation=self.geometry_normalisation,
+                distance_bins=self.distance_bins,
+            )
+        contrast = _group_contrast_coefficients(
+            len(samples), self.positive_samples, self.negative_samples
+        )
+        with timed("Solving differential cross-program objective", self.verbose):
+            self._fit_prepared(samples, n_components, tol=tol, contrast=contrast)
+        self.contrast_mode_statistic_ = self.aggregate_mode_statistic_.copy()
+        self.group_a_mode_statistic_ = np.mean(
+            self.sample_mode_statistic_[self.positive_samples], axis=0
+        )
+        self.group_b_mode_statistic_ = np.mean(
+            self.sample_mode_statistic_[self.negative_samples], axis=0
+        )
+        return self
+
+    def permutation_test(self, n_permutations=100, seed=0, tol=0):
+        """Sample-label permutation test with max-singular-value FWER control."""
+        n_permutations = int(n_permutations)
+        if n_permutations <= 0:
+            self.permutation_pvalues_ = np.full(len(self.singular_values), np.nan)
+            self.permutation_max_singular_values_ = np.empty(0)
+            return self.permutation_pvalues_
+        rng = np.random.default_rng(seed)
+        n = len(self.samples)
+        n_positive = len(self.positive_samples)
+        k = len(self.singular_values)
+        null = np.empty(n_permutations, dtype=float)
+        for b in range(n_permutations):
+            contrast = _permuted_group_contrast(rng, n, n_positive)
+            tmp = _CrossSpatialProgramBase(
+                self.radius,
+                objective=self.objective,
+                sample_weighting=self.sample_weighting,
+                expression_rank=self.expression_rank,
+                gain_ridge=self.gain_ridge,
+                graph_normalisation=self.graph_normalisation,
+                geometry_normalisation=self.geometry_normalisation,
+                distance_bins=self.distance_bins,
+                covariates_tol=self.covariates_tol,
+                block_size=self.block_size,
+                dtype=self.dtype,
+                verbose=False,
+            )
+            tmp._fit_prepared(self.samples, k, tol=tol, contrast=contrast)
+            null[b] = np.max(tmp.singular_values)
+        observed = np.asarray(self.singular_values)
+        pvalues = (1.0 + np.sum(null[:, None] >= observed[None, :], axis=0)) / (
+            n_permutations + 1.0
+        )
+        self.permutation_max_singular_values_ = null
+        self.permutation_pvalues_ = pvalues
+        return pvalues
 
 
 class CrossSpatialProgramModel(_CrossSpatialProgramBase):

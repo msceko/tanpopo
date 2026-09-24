@@ -79,7 +79,15 @@ New: `spatial-programs --labels` is hard-mask only. Niche/context analysis moves
 
 Shared and differential workflows now support a selected cell type directly. Differential
 sample contrasts can use sample-label permutations; cells are not treated as independent
-replicates.
+replicates. Differential contrasts now estimate a **difference of group means** rather
+than a difference of sample sums, so unequal biological replicate counts do not change
+the estimand. This changes differential eigenvalue magnitudes (and potentially modes)
+for comparisons with unequal group sizes.
+
+`differential-cross-programs` extends the same biological-sample contrast to rectangular
+target-neighbour mark-covariance operators. It returns paired target/neighbour loadings
+from the SVD of the group-mean contrast and supports max-singular-value sample-label
+permutation inference.
 
 ## Removed from the core CLI
 

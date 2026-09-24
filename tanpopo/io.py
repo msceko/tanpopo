@@ -173,8 +173,8 @@ def store_multi_sample_result(adatas, sample_names, model, cmd_id, key=""):
     return combined
 
 
-def store_shared_cross_result(adatas, sample_names, model, cmd_id):
-    """Store shared cross-program loadings and per-sample projected modes."""
+def store_multi_sample_cross_result(adatas, sample_names, model, cmd_id):
+    """Store shared or differential cross-program results across samples."""
     prefix = f"tanpopo_{cmd_id}"
     for adata, sample, target_modes, neighbour_modes in zip(
         adatas, model.samples, model.target_modes, model.neighbour_modes
@@ -189,17 +189,29 @@ def store_shared_cross_result(adatas, sample_names, model, cmd_id):
     combined = concat_adata_samples(adatas, sample_names)
     combined.varm[f"{prefix}_target_loadings"] = model.target_loadings
     combined.varm[f"{prefix}_neighbour_loadings"] = model.neighbour_loadings
-    combined.uns.setdefault("tanpopo", {}).setdefault(cmd_id, {})
-    combined.uns["tanpopo"][cmd_id]["singular_values"] = np.asarray(
-        model.singular_values
-    )
-    combined.uns["tanpopo"][cmd_id]["sample_coefficients"] = np.asarray(
-        model.sample_coefficients_
-    )
-    combined.uns["tanpopo"][cmd_id]["sample_mode_covariance"] = np.asarray(
-        model.sample_mode_covariance_
-    )
+    result = combined.uns.setdefault("tanpopo", {}).setdefault(cmd_id, {})
+    result["singular_values"] = np.asarray(model.singular_values)
+    result["sample_coefficients"] = np.asarray(model.sample_coefficients_)
+    if hasattr(model, "base_sample_weights_"):
+        result["base_sample_weights"] = np.asarray(model.base_sample_weights_)
+    if hasattr(model, "contrast_coefficients_"):
+        result["contrast_coefficients"] = np.asarray(model.contrast_coefficients_)
+    result["sample_mode_covariance"] = np.asarray(model.sample_mode_covariance_)
+    if hasattr(model, "sample_mode_statistic_"):
+        result["sample_mode_statistic"] = np.asarray(model.sample_mode_statistic_)
+    if hasattr(model, "aggregate_mode_statistic_"):
+        result["aggregate_mode_statistic"] = np.asarray(model.aggregate_mode_statistic_)
+    if hasattr(model, "contrast_mode_statistic_"):
+        result["contrast_mode_statistic"] = np.asarray(model.contrast_mode_statistic_)
+    if hasattr(model, "group_a_mode_statistic_"):
+        result["group_a_mode_statistic"] = np.asarray(model.group_a_mode_statistic_)
+    if hasattr(model, "group_b_mode_statistic_"):
+        result["group_b_mode_statistic"] = np.asarray(model.group_b_mode_statistic_)
     return combined
+
+
+# Backward-compatible internal alias.
+store_shared_cross_result = store_multi_sample_cross_result
 
 
 def store_cross_result(adata, model, cmd_id):

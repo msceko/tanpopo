@@ -1,8 +1,13 @@
 import numpy as np
 import pandas as pd
 
-from tanpopo.io import geometry_diagnostics_cfg, model_cfg, store_sample_result
-from tanpopo.models import SpatialProgramModel
+from tanpopo.io import (
+    geometry_diagnostics_cfg,
+    model_cfg,
+    store_multi_sample_cross_result,
+    store_sample_result,
+)
+from tanpopo.models import DifferentialCrossSpatialProgramModel, SpatialProgramModel
 
 
 class DummyAnnData:
@@ -48,3 +53,58 @@ def test_store_mark_correlation_retains_compatibility_key_and_metadata():
     assert cfg["geometry_normalisation"] == "distance"
     diagnostics = geometry_diagnostics_cfg(model)
     assert np.isclose(diagnostics["sample_0"]["pair_mass"], model.samples[0].n_spots)
+
+
+def test_store_differential_cross_result_includes_group_mode_statistics(monkeypatch):
+    rng = np.random.default_rng(201)
+    Xs, coords, targets, neighbours = [], [], [], []
+    for i in range(4):
+        n = 60 + 10 * i
+        x = np.linspace(0, 8, n)
+        target = np.arange(n) % 2 == 0
+        neighbour = ~target
+        X = rng.normal(size=(n, 7))
+        if i < 2:
+            field = np.sin(x)
+            X[target, 0] += field[target]
+            X[neighbour, 1] += field[neighbour]
+        Xs.append(X)
+        coords.append(np.c_[x, np.zeros(n)])
+        targets.append(target)
+        neighbours.append(neighbour)
+    model = DifferentialCrossSpatialProgramModel(
+        1.2,
+        positive_samples=[0, 1],
+        negative_samples=[2, 3],
+        geometry_normalisation="mass",
+    ).fit(
+        Xs,
+        coords,
+        2,
+        target_masks=targets,
+        neighbour_masks=neighbours,
+    )
+    adatas = [DummyAnnData(len(X), X.shape[1]) for X in Xs]
+    combined = DummyAnnData(sum(len(X) for X in Xs), Xs[0].shape[1])
+    monkeypatch.setattr(
+        "tanpopo.io.concat_adata_samples", lambda adatas, sample_names: combined
+    )
+    result = store_multi_sample_cross_result(
+        adatas, ["a1", "a2", "b1", "b2"], model, "diff_cross"
+    )
+    stored = result.uns["tanpopo"]["diff_cross"]
+    for key in (
+        "singular_values",
+        "sample_coefficients",
+        "base_sample_weights",
+        "contrast_coefficients",
+        "sample_mode_covariance",
+        "sample_mode_statistic",
+        "aggregate_mode_statistic",
+        "contrast_mode_statistic",
+        "group_a_mode_statistic",
+        "group_b_mode_statistic",
+    ):
+        assert key in stored
+    assert "tanpopo_diff_cross_target_loadings" in result.varm
+    assert "tanpopo_diff_cross_neighbour_loadings" in result.varm

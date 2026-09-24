@@ -2,7 +2,11 @@ import numpy as np
 
 from tanpopo.data import prepare_cross_sample, prepare_cross_samples, prepare_sample
 from tanpopo.kernel import kernel_matrix_sparse
-from tanpopo.models import CrossSpatialProgramModel, SharedCrossSpatialProgramModel
+from tanpopo.models import (
+    CrossSpatialProgramModel,
+    DifferentialCrossSpatialProgramModel,
+    SharedCrossSpatialProgramModel,
+)
 
 
 def cosine(a, b):
@@ -337,3 +341,141 @@ def test_single_cross_distance_normalisation_equals_mass_normalisation():
     np.testing.assert_allclose(
         distance.K.toarray(), mass.K.toarray(), rtol=1e-12, atol=1e-12
     )
+
+
+def make_differential_cross_samples(seed=170, group_a=3, group_b=2, n_genes=36):
+    rng = np.random.default_rng(seed)
+    vt = np.zeros(n_genes)
+    vu = np.zeros(n_genes)
+    vt[:6] = rng.normal(size=6)
+    neighbour_start = min(12, n_genes - 6)
+    neighbour_stop = min(neighbour_start + 6, n_genes)
+    vu[neighbour_start:neighbour_stop] = rng.normal(
+        size=neighbour_stop - neighbour_start
+    )
+    vt /= np.linalg.norm(vt)
+    vu /= np.linalg.norm(vu)
+    Xs, coords, targets, neighbours = [], [], [], []
+    for sample_index in range(group_a + group_b):
+        n = 180 + 20 * sample_index
+        x = np.linspace(0, 20, n)
+        xy = np.c_[x, np.zeros(n)]
+        target = np.arange(n) % 2 == 0
+        neighbour = ~target
+        X = rng.normal(scale=0.35, size=(n, n_genes))
+        if sample_index < group_a:
+            field = np.sin(x / 2.4 + 0.2 * sample_index)
+            X[target] += 2.3 * field[target, None] * vt
+            X[neighbour] += 2.5 * field[neighbour, None] * vu
+        else:
+            target_field = rng.normal(size=n)
+            neighbour_field = rng.normal(size=n)
+            X[target] += 1.6 * target_field[target, None] * vt
+            X[neighbour] += 1.6 * neighbour_field[neighbour, None] * vu
+        Xs.append(X)
+        coords.append(xy)
+        targets.append(target)
+        neighbours.append(neighbour)
+    return Xs, coords, targets, neighbours, vt, vu
+
+
+def test_differential_cross_recovers_group_a_specific_pair():
+    Xs, coords, targets, neighbours, vt, vu = make_differential_cross_samples()
+    model = DifferentialCrossSpatialProgramModel(
+        1.5,
+        positive_samples=[0, 1, 2],
+        negative_samples=[3, 4],
+        objective="covariance",
+    ).fit(
+        Xs,
+        coords,
+        3,
+        target_masks=targets,
+        neighbour_masks=neighbours,
+    )
+    assert max(cosine(vt, model.target_loadings[:, j]) for j in range(3)) > 0.85
+    assert max(cosine(vu, model.neighbour_loadings[:, j]) for j in range(3)) > 0.85
+    np.testing.assert_allclose(model.contrast_coefficients_[:3], 1.0 / 3.0)
+    np.testing.assert_allclose(model.contrast_coefficients_[3:], -1.0 / 2.0)
+    assert model.group_a_mode_statistic_.shape == (3,)
+    assert model.group_b_mode_statistic_.shape == (3,)
+    assert model.contrast_mode_statistic_[0] > 0
+
+
+def test_differential_cross_covariance_matches_explicit_group_mean_contrast():
+    Xs, coords, targets, neighbours, _, _ = make_differential_cross_samples(
+        seed=171, group_a=3, group_b=2, n_genes=20
+    )
+    model = DifferentialCrossSpatialProgramModel(
+        1.8,
+        positive_samples=[0, 1, 2],
+        negative_samples=[3, 4],
+        objective="covariance",
+    ).fit(
+        Xs,
+        coords,
+        4,
+        target_masks=targets,
+        neighbour_masks=neighbours,
+    )
+
+    explicit = np.zeros((20, 20))
+    for coefficient, sample in zip(model.sample_coefficients_, model.samples):
+        target = sample.W_target.toarray()
+        neighbour = sample.W_neighbour.toarray()
+        target -= target.mean(axis=0, keepdims=True)
+        neighbour -= neighbour.mean(axis=0, keepdims=True)
+        explicit += coefficient * target.T @ (sample.K @ neighbour)
+    expected = np.linalg.svd(explicit, compute_uv=False)[:4]
+    np.testing.assert_allclose(model.singular_values, expected, rtol=1e-6, atol=1e-8)
+    np.testing.assert_allclose(
+        model.contrast_mode_statistic_, model.singular_values, rtol=1e-6, atol=1e-8
+    )
+
+
+def test_differential_cross_supports_all_objectives_and_permutations():
+    Xs, coords, targets, neighbours, _, _ = make_differential_cross_samples(
+        seed=172, group_a=2, group_b=2, n_genes=24
+    )
+    for objective in ("covariance", "gene_standardized", "gain"):
+        model = DifferentialCrossSpatialProgramModel(
+            1.5,
+            positive_samples=[0, 1],
+            negative_samples=[2, 3],
+            objective=objective,
+            expression_rank=16,
+        ).fit(
+            Xs,
+            coords,
+            2,
+            target_masks=targets,
+            neighbour_masks=neighbours,
+        )
+        assert model.singular_values.shape == (2,)
+        assert model.sample_mode_statistic_.shape == (4, 2)
+        pvalues = model.permutation_test(4, seed=3)
+        assert pvalues.shape == (2,)
+        assert np.all((pvalues > 0) & (pvalues <= 1))
+        assert model.permutation_max_singular_values_.shape == (4,)
+
+
+def test_differential_cross_preserves_common_geometry_reference():
+    Xs, coords, targets, neighbours, _, _ = make_differential_cross_samples(
+        seed=173, group_a=2, group_b=2, n_genes=18
+    )
+    model = DifferentialCrossSpatialProgramModel(
+        1.7,
+        positive_samples=[0, 1],
+        negative_samples=[2, 3],
+        geometry_normalisation="distance",
+        distance_bins=5,
+    ).fit(
+        Xs,
+        coords,
+        2,
+        target_masks=targets,
+        neighbour_masks=neighbours,
+    )
+    reference = model.geometry_diagnostics_[0]["distance_reference_weights"]
+    for diagnostic in model.geometry_diagnostics_[1:]:
+        np.testing.assert_allclose(diagnostic["distance_reference_weights"], reference)

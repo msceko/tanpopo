@@ -9,7 +9,6 @@ from tanpopo.cli import *
 from tanpopo.data import get_spatial_from_anndata
 from tanpopo.io import (
     add_metadata,
-    concat_adata_samples,
     load_preprocess_sample,
     load_preprocess_samples,
     geometry_diagnostics_cfg,
@@ -18,11 +17,12 @@ from tanpopo.io import (
     store_cross_result,
     store_multi_sample_result,
     store_sample_result,
-    store_shared_cross_result,
+    store_multi_sample_cross_result,
 )
 from tanpopo.kernel import neighbour_spacing
 from tanpopo.models import (
     CrossSpatialProgramModel,
+    DifferentialCrossSpatialProgramModel,
     DifferentialSpatialProgramModel,
     SharedCrossSpatialProgramModel,
     LabelDecompositionModel,
@@ -180,20 +180,6 @@ def _radius_from_masks(adatas, masks):
         err=True,
     )
     return radius
-
-
-def _model_kwargs(
-    objective, spot_operator, expression_rank, gain_ridge, graph_normalisation, dtype, verbose
-):
-    return {
-        "objective": _resolve_objective(objective, None),
-        "spot_operator": as_value(spot_operator),
-        "expression_rank": expression_rank,
-        "gain_ridge": gain_ridge,
-        "graph_normalisation": as_value(graph_normalisation),
-        "dtype": as_value(dtype),
-        "verbose": verbose,
-    }
 
 
 @app.command("spatial-programs", no_args_is_help=True)
@@ -575,6 +561,34 @@ def label_decomposition(
     return adata
 
 
+def _multisample_cross_inputs(adatas, label_key, target_labels, neighbour_labels, layer):
+    """Resolve labels and assemble target/neighbour masks for multi-sample workflows."""
+    _require_obs_key(adatas[0], label_key)
+    targets = _multisample_labels(adatas, target_labels, label_key, "--target-labels")
+    neighbours = _multisample_labels(
+        adatas, neighbour_labels, label_key, "--neighbour-labels"
+    )
+    W, coords, covs, target_masks, neighbour_masks = [], [], [], [], []
+    for adata in adatas:
+        w, xy, cov = get_spatial_from_anndata(adata, layer)
+        W.append(w)
+        coords.append(xy)
+        covs.append(cov)
+        target_masks.append(adata.obs[label_key].isin(targets).to_numpy())
+        neighbour_masks.append(adata.obs[label_key].isin(neighbours).to_numpy())
+    return targets, neighbours, W, coords, covs, target_masks, neighbour_masks
+
+
+def _multisample_cross_radius(adatas, target_masks, neighbour_masks, radius):
+    if radius is not None:
+        return radius
+    union_masks = [
+        target | neighbour
+        for target, neighbour in zip(target_masks, neighbour_masks)
+    ]
+    return _radius_from_masks(adatas, union_masks)
+
+
 @app.command("shared-cross-programs", no_args_is_help=True)
 def shared_cross_programs(
     fnames: InputPaths,
@@ -621,26 +635,20 @@ def shared_cross_programs(
     adatas, sample_names = load_preprocess_samples(
         fnames, sample_names, verbose=verbose, **pre
     )
-    _require_obs_key(adatas[0], label_key)
-    targets = _multisample_labels(adatas, target_labels, label_key, "--target-labels")
-    neighbours = _multisample_labels(
-        adatas, neighbour_labels, label_key, "--neighbour-labels"
+    (
+        targets,
+        neighbours,
+        W,
+        coords,
+        covs,
+        target_masks,
+        neighbour_masks,
+    ) = _multisample_cross_inputs(
+        adatas, label_key, target_labels, neighbour_labels, layer
     )
-    W, coords, covs, target_masks, neighbour_masks = [], [], [], [], []
-    for adata in adatas:
-        w, xy, cov = get_spatial_from_anndata(adata, layer)
-        W.append(w)
-        coords.append(xy)
-        covs.append(cov)
-        target_masks.append(adata.obs[label_key].isin(targets).to_numpy())
-        neighbour_masks.append(adata.obs[label_key].isin(neighbours).to_numpy())
-
-    if radius is None:
-        union_masks = [
-            target | neighbour
-            for target, neighbour in zip(target_masks, neighbour_masks)
-        ]
-        radius = _radius_from_masks(adatas, union_masks)
+    radius = _multisample_cross_radius(
+        adatas, target_masks, neighbour_masks, radius
+    )
     model = SharedCrossSpatialProgramModel(
         radius,
         objective=as_value(objective),
@@ -660,7 +668,7 @@ def shared_cross_programs(
         neighbour_masks=neighbour_masks,
         covariates=covs,
     )
-    combined = store_shared_cross_result(adatas, sample_names, model, cmd_id)
+    combined = store_multi_sample_cross_result(adatas, sample_names, model, cmd_id)
     add_metadata(
         combined,
         cmd_id,
@@ -670,11 +678,124 @@ def shared_cross_programs(
             "sample_names": sample_names,
             "target_labels": [str(x) for x in targets],
             "neighbour_labels": [str(x) for x in neighbours],
-            "sample_coefficients": model.sample_coefficients_,
-            "sample_mode_covariance": model.sample_mode_covariance_,
             "geometry_diagnostics": geometry_diagnostics_cfg(model, sample_names),
         },
     )
+    if output is not None:
+        combined.write_h5ad(output)
+    return combined
+
+
+@app.command("differential-cross-programs", no_args_is_help=True)
+def differential_cross_programs(
+    fnames_a: InputPathsA,
+    fnames_b: InputPathsB,
+    label_key: LabelKey,
+    target_labels: TargetLabels,
+    neighbour_labels: NeighbourLabels,
+    output: OutputPath = None,
+    cmd_id: ExperimentId = "differential_cross",
+    radius: Radius = None,
+    sample_names: SampleNames = None,
+    n_components: Components = 8,
+    layer: Layer = None,
+    objective: Objective = ObjectiveTypes.covariance,
+    expression_rank: ExpressionRank = 50,
+    gain_ridge: GainRidge = 1e-8,
+    graph_normalisation: GraphNormalisation = GraphNormalisationTypes.symmetric,
+    geometry_normalisation: GeometryNormalisation = GeometryNormalisationTypes.distance,
+    distance_bins: DistanceBins = 10,
+    sample_weighting: SampleWeighting = SampleWeightingTypes.n_spots,
+    include: Include = None,
+    exclude: Exclude = None,
+    transform: Transform = None,
+    min_counts: MinCounts = 10,
+    min_spot_fraction: MinSpotFraction = None,
+    target_sum: TargetSum = None,
+    covariates: Covariates = None,
+    permutations: Permutations = 0,
+    seed: RandomSeed = 0,
+    dtype: Dtype = Dtypes.float64,
+    verbose: Verbose = False,
+):
+    """Target-neighbour cross-covariance programs differing between sample groups."""
+    if not fnames_a or not fnames_b:
+        raise typer.BadParameter("At least one sample is required in each group")
+    fnames = list(fnames_a) + list(fnames_b)
+    pre = _pre_args(
+        target_sum,
+        transform,
+        min_counts,
+        min_spot_fraction,
+        covariates,
+        label_key,
+        layer,
+        include,
+        exclude,
+    )
+    adatas, sample_names = load_preprocess_samples(
+        fnames, sample_names, verbose=verbose, **pre
+    )
+    (
+        targets,
+        neighbours,
+        W,
+        coords,
+        covs,
+        target_masks,
+        neighbour_masks,
+    ) = _multisample_cross_inputs(
+        adatas, label_key, target_labels, neighbour_labels, layer
+    )
+    radius = _multisample_cross_radius(
+        adatas, target_masks, neighbour_masks, radius
+    )
+    n_a = len(fnames_a)
+    model = DifferentialCrossSpatialProgramModel(
+        radius,
+        positive_samples=range(n_a),
+        negative_samples=range(n_a, len(fnames)),
+        objective=as_value(objective),
+        sample_weighting=as_value(sample_weighting),
+        expression_rank=expression_rank,
+        gain_ridge=gain_ridge,
+        graph_normalisation=as_value(graph_normalisation),
+        geometry_normalisation=as_value(geometry_normalisation),
+        distance_bins=distance_bins,
+        dtype=as_value(dtype),
+        verbose=verbose,
+    ).fit(
+        W,
+        coords,
+        n_components,
+        target_masks=target_masks,
+        neighbour_masks=neighbour_masks,
+        covariates=covs,
+    )
+    if permutations:
+        model.permutation_test(permutations, seed=seed)
+    combined = store_multi_sample_cross_result(adatas, sample_names, model, cmd_id)
+    add_metadata(
+        combined,
+        cmd_id,
+        pre,
+        model_cfg(model),
+        {
+            "sample_names": sample_names,
+            "group_a": sample_names[:n_a],
+            "group_b": sample_names[n_a:],
+            "target_labels": [str(x) for x in targets],
+            "neighbour_labels": [str(x) for x in neighbours],
+            "permutations": int(permutations),
+            "geometry_diagnostics": geometry_diagnostics_cfg(model, sample_names),
+        },
+    )
+    if permutations:
+        result = combined.uns["tanpopo"][cmd_id]
+        result["permutation_pvalues"] = model.permutation_pvalues_
+        result["permutation_max_singular_values"] = (
+            model.permutation_max_singular_values_
+        )
     if output is not None:
         combined.write_h5ad(output)
     return combined

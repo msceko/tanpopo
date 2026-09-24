@@ -1,5 +1,6 @@
 from tanpopo.models import (
     CrossSpatialProgramModel,
+    DifferentialCrossSpatialProgramModel,
     DifferentialSpatialProgramModel,
     LabelDecompositionModel,
     SharedCrossSpatialProgramModel,
@@ -14,6 +15,7 @@ __all__ = [
     "SpatialProgramModel",
     "SharedSpatialProgramModel",
     "SharedCrossSpatialProgramModel",
+    "DifferentialCrossSpatialProgramModel",
     "DifferentialSpatialProgramModel",
     "LabelDecompositionModel",
     "CrossSpatialProgramModel",

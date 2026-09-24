@@ -523,8 +523,6 @@ def concatenate_cross_samples(samples):
         raise ValueError("All cross samples must contain the same genes")
     W_target = sp.vstack([sample.W_target for sample in samples], format="csr")
     W_neighbour = sp.vstack([sample.W_neighbour for sample in samples], format="csr")
-    K = sp.block_diag([sample.K for sample in samples], format="csr")
-
     target_lengths = np.asarray([sample.n_target for sample in samples], dtype=np.int64)
     neighbour_lengths = np.asarray([sample.n_neighbour for sample in samples], dtype=np.int64)
     target_offsets = np.r_[0, np.cumsum(target_lengths[:-1])].astype(np.int64)
@@ -537,7 +535,6 @@ def concatenate_cross_samples(samples):
     return (
         W_target,
         W_neighbour,
-        K,
         target_groups,
         neighbour_groups,
         cov_target,

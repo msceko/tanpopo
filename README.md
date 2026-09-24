@@ -18,6 +18,7 @@ Check if it has installed correctly by running `tanpopo` to get a list of availa
 │ label-decomposition           Decompose a spatial pair statistic into between-label, within-label and coupling terms. │
 │ cross-programs                Paired neighbour-context and target-response gene programs.                             │
 │ shared-cross-programs         Paired target-neighbour programs shared across biological samples.                     │
+│ differential-cross-programs   Target-neighbour cross-covariance programs differing between sample groups.            │
 │ pca-programs                  Ordinary PCA globally or within selected cell types.                                    │
 │ estimate-spacing              Mean nearest-neighbour distance for a spatial sample.                                   │
 ╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
@@ -302,9 +303,11 @@ tanpopo differential-sample-programs \
   --permutations 1000
 ```
 
-The contrast is a difference of biological-sample spatial operators. Positive and
-negative eigenvalues identify structure enriched on opposite sides of the contrast.
-Optional sample-label permutations use the maximum absolute eigenvalue to provide
+The contrast is a **difference of biological-sample group means**. Each sample is
+first balanced according to `--sample-weighting`; group-A coefficients then sum to
+`+1` and group-B coefficients to `-1`. Positive and negative eigenvalues identify
+structure enriched on opposite sides of the contrast. Optional sample-label
+permutations preserve group sizes and use the maximum absolute eigenvalue to provide
 two-sided family-wise corrected mode p-values.
 
 To compare local expression roughness rather than cross-cell covariance, use for
@@ -431,9 +434,74 @@ obsm['tanpopo_<id>_neighbour_modes']
 uns ['tanpopo'][<id>]['singular_values']
 uns ['tanpopo'][<id>]['sample_coefficients']
 uns ['tanpopo'][<id>]['sample_mode_covariance']
+uns ['tanpopo'][<id>]['sample_mode_statistic']
+uns ['tanpopo'][<id>]['aggregate_mode_statistic']
 ```
 
-### 6. Exact label-source decomposition
+### 6. Differential target-neighbour programs across sample groups
+
+```bash
+tanpopo differential-cross-programs \
+  -ia responder1.h5ad -ia responder2.h5ad \
+  -ib nonresponder1.h5ad -ib nonresponder2.h5ad \
+  -o differential_cross.h5ad \
+  --label-key cell_type \
+  --target-labels Fibroblasts \
+  --neighbour-labels Macrophages \
+  --radius 30 \
+  --components 5 \
+  --objective covariance \
+  --geometry-normalisation distance \
+  --distance-bins 10 \
+  --permutations 1000
+```
+
+For each biological sample, let
+
+\[
+C_s = w_s\,Y_{t,s}^T A_{tu,s}Y_{u,s},
+\]
+
+where the default `w_s=1/sqrt(n_target*n_neighbour)` cancels the standardised
+bipartite pair mass. Differential cross programs use the group-mean contrast
+
+\[
+\Delta C
+=
+\frac{1}{n_A}\sum_{s\in A} C_s
+-
+\frac{1}{n_B}\sum_{s\in B} C_s,
+\]
+
+and return the leading paired programs from
+
+\[
+\Delta C = U\Sigma V^T.
+\]
+
+Unlike the symmetric differential operator, `Sigma` contains non-negative singular
+values: there is no meaningful positive/negative singular-value sign. Tanpopo therefore
+stores the geometry/sample-normalised statistic for every biological sample and the
+corresponding group-A mean, group-B mean, and contrast for each fitted mode. For the
+`covariance` objective the stored `contrast_mode_statistic` equals the fitted singular
+value up to numerical precision. The group-specific values should be used to determine
+which side of the comparison carries the paired target-neighbour relationship.
+
+Sample-label permutations retain the observed group sizes and use the maximum singular
+value in each permutation to provide family-wise corrected mode p-values. Geometry is
+prepared once across all samples and remains fixed while group labels are permuted.
+
+Additional outputs are:
+
+```text
+uns ['tanpopo'][<id>]['group_a_mode_statistic']
+uns ['tanpopo'][<id>]['group_b_mode_statistic']
+uns ['tanpopo'][<id>]['contrast_mode_statistic']
+uns ['tanpopo'][<id>]['permutation_pvalues']
+uns ['tanpopo'][<id>]['permutation_max_singular_values']
+```
+
+### 7. Exact label-source decomposition
 
 ```bash
 tanpopo label-decomposition \
@@ -601,6 +669,31 @@ model = SharedCrossSpatialProgramModel(
 
 # rows are patients, columns are shared paired modes
 patient_covariance = model.sample_mode_covariance_
+```
+
+Differential cross-population programs:
+
+```python
+from tanpopo import DifferentialCrossSpatialProgramModel
+
+model = DifferentialCrossSpatialProgramModel(
+    30,
+    positive_samples=[0, 1, 2],
+    negative_samples=[3, 4],
+    objective="covariance",
+    geometry_normalisation="distance",
+).fit(
+    [X1, X2, X3, X4, X5],
+    [coords1, coords2, coords3, coords4, coords5],
+    n_components=5,
+    target_masks=target_masks,
+    neighbour_masks=neighbour_masks,
+)
+
+# group-normalised target-neighbour statistic along each fitted mode
+group_a = model.group_a_mode_statistic_
+group_b = model.group_b_mode_statistic_
+contrast = model.contrast_mode_statistic_
 ```
 
 ## Validation priorities

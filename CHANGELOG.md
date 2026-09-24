@@ -15,6 +15,15 @@
 - Cross workflows remove overlapping target/neighbour self-pairs by original
   observation ID before bipartite degree normalisation and report separate row/column
   geometry diagnostics.
+- Added `differential-cross-programs` and `DifferentialCrossSpatialProgramModel` for
+  biological-sample group contrasts of target-neighbour spatial cross-covariance, with
+  geometry balancing, all cross objectives, per-sample/group mode statistics, and
+  max-singular-value permutation inference.
+- Differential square and cross workflows now use differences of group means
+  (`+1/n_A`, `-1/n_B`) rather than differences of sample sums, removing replicate-count
+  bias for unequal groups.
+- Refactored shared/differential cross result storage and multi-sample cross input
+  preparation to avoid duplicated workflow logic.
 
 # Changelog
 
