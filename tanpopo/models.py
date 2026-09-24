@@ -501,6 +501,8 @@ class _CrossSpatialProgramBase:
         expression_rank=50,
         gain_ridge=1e-8,
         graph_normalisation="symmetric",
+        geometry_normalisation="distance",
+        distance_bins=10,
         covariates_tol=1e-10,
         block_size=256,
         dtype=np.float64,
@@ -508,12 +510,22 @@ class _CrossSpatialProgramBase:
     ):
         if objective not in VALID_OBJECTIVES:
             raise ValueError(f"objective must be one of {sorted(VALID_OBJECTIVES)}")
+        if geometry_normalisation not in VALID_GEOMETRY_NORMALISATIONS:
+            raise ValueError(
+                "geometry_normalisation must be one of "
+                f"{sorted(VALID_GEOMETRY_NORMALISATIONS)}"
+            )
+        if int(distance_bins) < 1:
+            raise ValueError("distance_bins must be positive")
         self.radius = float(radius)
         self.objective = objective
         self.sample_weighting = sample_weighting
         self.expression_rank = int(expression_rank)
         self.gain_ridge = float(gain_ridge)
         self.graph_normalisation = graph_normalisation
+        self.spatial_statistic = "mark_correlation"
+        self.geometry_normalisation = geometry_normalisation
+        self.distance_bins = int(distance_bins)
         self.covariates_tol = covariates_tol
         self.block_size = block_size
         self.dtype = np.dtype(dtype)
@@ -521,6 +533,7 @@ class _CrossSpatialProgramBase:
 
     def _fit_prepared(self, samples, n_components, tol=0):
         self.samples = samples
+        self.geometry_diagnostics_ = [sample.geometry_diagnostics for sample in samples]
         (
             W_target,
             W_neighbour,
@@ -669,10 +682,12 @@ class _CrossSpatialProgramBase:
 class SharedCrossSpatialProgramModel(_CrossSpatialProgramBase):
     """Paired target-neighbour programs shared across biological samples.
 
-    Each sample contributes its bipartite cross-covariance independently. With
-    ``sample_weighting='n_spots'`` (the default), sample ``s`` is weighted by
-    ``1 / sqrt(n_target_s * n_neighbour_s)`` so a large tissue does not dominate
-    merely because it contains more cells.
+    Each sample contributes its bipartite cross-covariance independently. Pair
+    geometry can be standardised before expression enters the model. With the
+    default ``geometry_normalisation='distance'``, all samples use one common
+    target-neighbour distance profile and total pair mass
+    ``sqrt(n_target_s * n_neighbour_s)``. The default ``sample_weighting='n_spots'``
+    is its reciprocal, so every biological sample contributes unit total pair mass.
     """
 
     def __init__(self, *args, sample_weighting="n_spots", **kwargs):
@@ -698,6 +713,8 @@ class SharedCrossSpatialProgramModel(_CrossSpatialProgramBase):
                 covariates=covariates,
                 dtype=self.dtype,
                 graph_normalisation=self.graph_normalisation,
+                geometry_normalisation=self.geometry_normalisation,
+                distance_bins=self.distance_bins,
             )
         with timed("Solving shared cross-program objective", self.verbose):
             return self._fit_prepared(samples, n_components, tol=tol)
@@ -730,6 +747,8 @@ class CrossSpatialProgramModel(_CrossSpatialProgramBase):
                 covariates=None if covariates is None else [covariates],
                 dtype=self.dtype,
                 graph_normalisation=self.graph_normalisation,
+                geometry_normalisation=self.geometry_normalisation,
+                distance_bins=self.distance_bins,
             )
         with timed("Solving cross-program objective", self.verbose):
             self._fit_prepared(samples, n_components, tol=tol)

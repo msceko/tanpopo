@@ -591,6 +591,8 @@ def shared_cross_programs(
     expression_rank: ExpressionRank = 50,
     gain_ridge: GainRidge = 1e-8,
     graph_normalisation: GraphNormalisation = GraphNormalisationTypes.symmetric,
+    geometry_normalisation: GeometryNormalisation = GeometryNormalisationTypes.distance,
+    distance_bins: DistanceBins = 10,
     sample_weighting: SampleWeighting = SampleWeightingTypes.n_spots,
     include: Include = None,
     exclude: Exclude = None,
@@ -646,6 +648,8 @@ def shared_cross_programs(
         expression_rank=expression_rank,
         gain_ridge=gain_ridge,
         graph_normalisation=as_value(graph_normalisation),
+        geometry_normalisation=as_value(geometry_normalisation),
+        distance_bins=distance_bins,
         dtype=as_value(dtype),
         verbose=verbose,
     ).fit(
@@ -668,6 +672,7 @@ def shared_cross_programs(
             "neighbour_labels": [str(x) for x in neighbours],
             "sample_coefficients": model.sample_coefficients_,
             "sample_mode_covariance": model.sample_mode_covariance_,
+            "geometry_diagnostics": geometry_diagnostics_cfg(model, sample_names),
         },
     )
     if output is not None:
@@ -690,6 +695,8 @@ def cross_programs(
     expression_rank: ExpressionRank = 50,
     gain_ridge: GainRidge = 1e-8,
     graph_normalisation: GraphNormalisation = GraphNormalisationTypes.symmetric,
+    geometry_normalisation: GeometryNormalisation = GeometryNormalisationTypes.distance,
+    distance_bins: DistanceBins = 10,
     include: Include = None,
     exclude: Exclude = None,
     transform: Transform = None,
@@ -727,6 +734,8 @@ def cross_programs(
         expression_rank=expression_rank,
         gain_ridge=gain_ridge,
         graph_normalisation=as_value(graph_normalisation),
+        geometry_normalisation=as_value(geometry_normalisation),
+        distance_bins=distance_bins,
         dtype=as_value(dtype),
         verbose=verbose,
     ).fit(
@@ -742,16 +751,11 @@ def cross_programs(
         adata,
         cmd_id,
         pre,
-        {
-            "radius": radius,
-            "objective": as_value(objective),
-            "expression_rank": expression_rank,
-            "gain_ridge": gain_ridge,
-            "graph_normalisation": as_value(graph_normalisation),
-        },
+        model_cfg(model),
         {
             "target_labels": [str(x) for x in targets],
             "neighbour_labels": [str(x) for x in neighbours],
+            "geometry_diagnostics": geometry_diagnostics_cfg(model),
         },
     )
     if output is not None:

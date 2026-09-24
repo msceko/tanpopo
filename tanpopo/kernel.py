@@ -27,17 +27,26 @@ def wendland_c2(r):
     return out
 
 
-def _warn_connectivity(K, radius, threshold=0.5):
+def _warn_connectivity(K, radius, threshold=0.5, check_columns=False):
     if K.shape[0] == 0:
         return
-    counts = np.diff(K.indptr)
-    fraction = float(np.mean(counts == 0))
-    if fraction > threshold:
+    row_counts = np.diff(K.indptr)
+    row_fraction = float(np.mean(row_counts == 0))
+    if row_fraction > threshold:
         warnings.warn(
-            f"radius={radius} leaves {fraction:.1%} of kernel centres with no neighbours. "
+            f"radius={radius} leaves {row_fraction:.1%} of kernel rows with no neighbours. "
             "Consider increasing --radius.",
             UserWarning,
         )
+    if check_columns:
+        col_counts = np.diff(K.tocsc().indptr)
+        col_fraction = float(np.mean(col_counts == 0))
+        if col_fraction > threshold:
+            warnings.warn(
+                f"radius={radius} leaves {col_fraction:.1%} of kernel columns with no "
+                "neighbours. Consider increasing --radius.",
+                UserWarning,
+            )
 
 
 def _symmetric_normalize(K, eps=1e-12):
@@ -58,6 +67,29 @@ def _bipartite_normalize(K, eps=1e-12):
     return (sp.diags(row_inv, format="csr") @ K @ sp.diags(col_inv, format="csr")).tocsr()
 
 
+def _remove_identity_pairs(K, row_ids, col_ids):
+    """Remove pairs referring to the same original observation.
+
+    This is the rectangular analogue of a zero diagonal. The row and column
+    positions need not coincide, so original observation IDs are used rather than
+    matrix diagonal indices.
+    """
+    row_ids = np.asarray(row_ids)
+    col_ids = np.asarray(col_ids)
+    if row_ids.shape != (K.shape[0],) or col_ids.shape != (K.shape[1],):
+        raise ValueError("row_ids and col_ids must align with the pair kernel")
+    common, row_pos, col_pos = np.intersect1d(
+        row_ids, col_ids, assume_unique=False, return_indices=True
+    )
+    if common.size == 0:
+        return K.tocsr(), 0
+    K = K.tolil(copy=True)
+    K[row_pos, col_pos] = 0
+    K = K.tocsr()
+    K.eliminate_zeros()
+    return K, int(common.size)
+
+
 def kernel_matrix_sparse(
     coords,
     radius,
@@ -65,15 +97,19 @@ def kernel_matrix_sparse(
     dtype=np.float64,
     normalisation="symmetric",
     zero_diagonal=True,
+    row_ids=None,
+    query_ids=None,
+    exclude_identity_pairs=False,
 ):
-    """Build the base Wendland adjacency used by Tanpopo.
+    """Build a Wendland pair adjacency used by Tanpopo.
 
-    Square kernels are zero-diagonal by default. ``normalisation='symmetric'``
-    uses D^-1/2 K D^-1/2. Rectangular kernels use the analogous bipartite
-    degree normalisation.
+    Square kernels are zero-diagonal by default. Rectangular kernels may remove
+    biological self-pairs by supplying original ``row_ids``/``query_ids`` and
+    ``exclude_identity_pairs=True``. Identity removal occurs before degree
+    normalisation, so excluded self-pairs cannot distort the remaining weights.
 
-    Geometry standardisation and conversion to a mark-correlation or variogram
-    operator are deliberately separate; see :func:`spatial_statistic_kernels`.
+    ``normalisation='symmetric'`` uses D^-1/2 K D^-1/2 for square graphs and the
+    analogous row/column degree normalisation for bipartite graphs.
     """
     coords = np.asarray(coords, dtype=dtype)
     square = coords_query is None
@@ -97,25 +133,30 @@ def kernel_matrix_sparse(
         if zero_diagonal:
             K.setdiag(0)
             K.eliminate_zeros()
-        _warn_connectivity(K, radius)
-        if normalisation == "symmetric":
-            K = _symmetric_normalize(K)
-        elif normalisation != "none":
-            raise ValueError("normalisation must be 'symmetric' or 'none'")
-    else:
-        if normalisation == "symmetric":
-            K = _bipartite_normalize(K)
-        elif normalisation != "none":
-            raise ValueError("normalisation must be 'symmetric' or 'none'")
+    elif exclude_identity_pairs:
+        if row_ids is None or query_ids is None:
+            raise ValueError(
+                "row_ids and query_ids are required when excluding rectangular identity pairs"
+            )
+        K, _ = _remove_identity_pairs(K, row_ids, query_ids)
+
+    _warn_connectivity(K, radius, check_columns=not square)
+    if normalisation == "symmetric":
+        K = _symmetric_normalize(K) if square else _bipartite_normalize(K)
+    elif normalisation != "none":
+        raise ValueError("normalisation must be 'symmetric' or 'none'")
 
     return K.astype(dtype, copy=False)
 
 
-def _edge_distances(K, coords):
-    """Return COO edge indices and Euclidean distances for nonzero entries of K."""
+def _edge_distances(K, row_coords, col_coords=None):
+    """Return COO edge indices and Euclidean distances for nonzero pair weights."""
     C = K.tocoo(copy=False)
-    coords = np.asarray(coords, dtype=float)
-    delta = coords[C.row] - coords[C.col]
+    row_coords = np.asarray(row_coords, dtype=float)
+    col_coords = row_coords if col_coords is None else np.asarray(col_coords, dtype=float)
+    if row_coords.shape[0] != K.shape[0] or col_coords.shape[0] != K.shape[1]:
+        raise ValueError("Coordinate matrices must align with the pair kernel")
+    delta = row_coords[C.row] - col_coords[C.col]
     distances = np.sqrt(np.sum(delta * delta, axis=1))
     return C, distances
 
@@ -127,8 +168,8 @@ def _bin_index(distances, bin_edges):
     return np.clip(idx, 0, len(bin_edges) - 2)
 
 
-def _bin_masses(K, coords, bin_edges):
-    C, distances = _edge_distances(K, coords)
+def _bin_masses(K, row_coords, col_coords, bin_edges):
+    C, distances = _edge_distances(K, row_coords, col_coords)
     idx = _bin_index(distances, bin_edges)
     masses = np.bincount(idx, weights=C.data, minlength=len(bin_edges) - 1).astype(float)
     return masses, C, idx, distances
@@ -137,69 +178,8 @@ def _bin_masses(K, coords, bin_edges):
 def _mass_standardise(K, target_mass, eps=1e-12):
     mass = float(K.sum())
     if mass <= eps:
-        raise ValueError("Spatial graph has zero total edge weight")
+        raise ValueError("Spatial graph has zero total pair weight")
     return (K * (float(target_mass) / mass)).tocsr()
-
-
-def _distance_standardise(adjacencies, coords, radius, n_bins, eps=1e-12):
-    """Standardise all samples to one common weighted pair-distance measure.
-
-    The reference distance profile is the equal-sample mean of each sample's
-    normalised weighted pair-distance profile, restricted to bins represented in
-    every sample. Each output adjacency has total mass equal to its number of
-    cells, so subsequent ``1 / n_spots`` sample weighting estimates an average
-    pair statistic under the same reference measure in every tissue.
-    """
-    n_bins = int(n_bins)
-    if n_bins < 1:
-        raise ValueError("distance_bins must be a positive integer")
-    bin_edges = np.linspace(0.0, float(radius), n_bins + 1)
-    cached = [_bin_masses(K, xy, bin_edges) for K, xy in zip(adjacencies, coords)]
-    masses = np.vstack([x[0] for x in cached])
-    common = np.all(masses > eps, axis=0)
-    if not np.any(common):
-        raise ValueError(
-            "No distance bin has positive pair weight in every sample; increase --radius, "
-            "reduce --distance-bins, or use --geometry-normalisation mass."
-        )
-
-    profiles = np.zeros_like(masses, dtype=float)
-    for i, row in enumerate(masses):
-        total = float(row[common].sum())
-        profiles[i, common] = row[common] / total
-    reference = profiles.mean(axis=0)
-    reference[~common] = 0.0
-    reference /= reference.sum()
-
-    outputs = []
-    diagnostics = []
-    for K, xy, (row_mass, C, idx, distances) in zip(adjacencies, coords, cached):
-        keep = common[idx]
-        scale = np.zeros(n_bins, dtype=float)
-        n = K.shape[0]
-        scale[common] = n * reference[common] / row_mass[common]
-        data = C.data * scale[idx]
-        data[~keep] = 0.0
-        out = sp.csr_matrix((data, (C.row, C.col)), shape=K.shape, dtype=K.dtype)
-        out.eliminate_zeros()
-        outputs.append(out)
-        diagnostics.append(
-            {
-                "raw_pair_mass": float(K.sum()),
-                "pair_mass": float(out.sum()),
-                "distance_bin_mass_raw": row_mass.copy(),
-                "distance_bin_mass": np.bincount(
-                    idx[keep], weights=data[keep], minlength=n_bins
-                ).astype(float),
-                "distance_bin_edges": bin_edges.copy(),
-                "distance_reference_weights": reference.copy(),
-                "common_distance_bins": common.copy(),
-                "weighted_distance_quantiles": _weighted_quantiles(
-                    distances[keep], data[keep], [0.1, 0.5, 0.9]
-                ),
-            }
-        )
-    return outputs, diagnostics
 
 
 def _weighted_quantiles(values, weights, quantiles):
@@ -214,6 +194,165 @@ def _weighted_quantiles(values, weights, quantiles):
     cdf = np.cumsum(weights)
     cdf /= cdf[-1]
     return np.interp(quantiles, cdf, values)
+
+
+def _degree_summary(values, prefix):
+    values = np.asarray(values, dtype=float)
+    mean = float(np.mean(values)) if values.size else 0.0
+    cv = float(np.std(values) / mean) if values.size and mean > 0 else 0.0
+    return {
+        f"{prefix}_mean_weighted_degree": mean,
+        f"{prefix}_median_weighted_degree": float(np.median(values)) if values.size else 0.0,
+        f"{prefix}_weighted_degree_cv": cv,
+        f"{prefix}_isolated_fraction": float(np.mean(values == 0)) if values.size else 0.0,
+    }
+
+
+def kernel_diagnostics(K):
+    """Diagnostics for square or rectangular pair adjacencies."""
+    K = K.tocsr()
+    row_degree = np.asarray(K.sum(axis=1)).ravel()
+    col_degree = np.asarray(K.sum(axis=0)).ravel()
+    row = _degree_summary(row_degree, "row")
+    col = _degree_summary(col_degree, "column")
+    result = {
+        "n_rows": int(K.shape[0]),
+        "n_cols": int(K.shape[1]),
+        "nnz": int(K.nnz),
+        "total_edge_weight": float(K.sum()),
+        **row,
+        **col,
+    }
+    # Preserve historical square-graph diagnostic names as row aliases.
+    result.update(
+        {
+            "isolated_fraction": row["row_isolated_fraction"],
+            "mean_weighted_degree": row["row_mean_weighted_degree"],
+            "median_weighted_degree": row["row_median_weighted_degree"],
+            "weighted_degree_cv": row["row_weighted_degree_cv"],
+        }
+    )
+    return result
+
+
+def standardise_pair_measures(
+    adjacencies,
+    row_coords,
+    col_coords,
+    target_masses,
+    radius,
+    *,
+    geometry_normalisation="distance",
+    distance_bins=10,
+    eps=1e-12,
+):
+    """Standardise square or bipartite pair measures with one implementation.
+
+    ``target_masses`` defines the total pair mass after normalisation. Square
+    workflows use ``n_s``; cross workflows use ``sqrt(n_target_s*n_neighbour_s)``.
+    Under the existing corresponding sample weights, each biological specimen
+    therefore contributes unit total pair mass.
+    """
+    if geometry_normalisation not in VALID_GEOMETRY_NORMALISATIONS:
+        raise ValueError(
+            "geometry_normalisation must be one of "
+            f"{sorted(VALID_GEOMETRY_NORMALISATIONS)}"
+        )
+    if not adjacencies:
+        raise ValueError("At least one pair adjacency is required")
+    if not (
+        len(adjacencies)
+        == len(row_coords)
+        == len(col_coords)
+        == len(target_masses)
+    ):
+        raise ValueError("Pair adjacencies, coordinates and target masses must align")
+
+    row_coords = [np.asarray(xy, dtype=float) for xy in row_coords]
+    col_coords = [np.asarray(xy, dtype=float) for xy in col_coords]
+    target_masses = np.asarray(target_masses, dtype=float)
+    if np.any(~np.isfinite(target_masses)) or np.any(target_masses <= 0):
+        raise ValueError("target_masses must be finite and positive")
+
+    diagnostics = []
+    if geometry_normalisation == "distance":
+        distance_bins = int(distance_bins)
+        if distance_bins < 1:
+            raise ValueError("distance_bins must be a positive integer")
+        bin_edges = np.linspace(0.0, float(radius), distance_bins + 1)
+        cached = [
+            _bin_masses(K, row_xy, col_xy, bin_edges)
+            for K, row_xy, col_xy in zip(adjacencies, row_coords, col_coords)
+        ]
+        masses = np.vstack([x[0] for x in cached])
+        common = np.all(masses > eps, axis=0)
+        if not np.any(common):
+            raise ValueError(
+                "No distance bin has positive pair weight in every sample; increase "
+                "--radius, reduce --distance-bins, or use --geometry-normalisation mass."
+            )
+
+        profiles = np.zeros_like(masses, dtype=float)
+        for i, row in enumerate(masses):
+            profiles[i, common] = row[common] / float(row[common].sum())
+        reference = profiles.mean(axis=0)
+        reference[~common] = 0.0
+        reference /= reference.sum()
+
+        outputs = []
+        for K, target_mass, (raw_bin_mass, C, idx, distances) in zip(
+            adjacencies, target_masses, cached
+        ):
+            keep = common[idx]
+            scale = np.zeros(distance_bins, dtype=float)
+            scale[common] = target_mass * reference[common] / raw_bin_mass[common]
+            data = C.data * scale[idx]
+            data[~keep] = 0.0
+            out = sp.csr_matrix((data, (C.row, C.col)), shape=K.shape, dtype=K.dtype)
+            out.eliminate_zeros()
+            outputs.append(out)
+            diagnostics.append(
+                {
+                    "raw_pair_mass": float(K.sum()),
+                    "pair_mass": float(out.sum()),
+                    "target_pair_mass": float(target_mass),
+                    "distance_bin_mass_raw": raw_bin_mass.copy(),
+                    "distance_bin_mass": np.bincount(
+                        idx[keep], weights=data[keep], minlength=distance_bins
+                    ).astype(float),
+                    "distance_bin_edges": bin_edges.copy(),
+                    "distance_reference_weights": reference.copy(),
+                    "common_distance_bins": common.copy(),
+                    "weighted_distance_quantiles": _weighted_quantiles(
+                        distances[keep], data[keep], [0.1, 0.5, 0.9]
+                    ),
+                }
+            )
+    else:
+        outputs = []
+        for K, row_xy, col_xy, target_mass in zip(
+            adjacencies, row_coords, col_coords, target_masses
+        ):
+            raw_mass = float(K.sum())
+            if geometry_normalisation == "mass":
+                K = _mass_standardise(K, target_mass)
+            C, distances = _edge_distances(K, row_xy, col_xy)
+            outputs.append(K)
+            diagnostics.append(
+                {
+                    "raw_pair_mass": raw_mass,
+                    "pair_mass": float(K.sum()),
+                    "target_pair_mass": float(target_mass),
+                    "weighted_distance_quantiles": _weighted_quantiles(
+                        distances, C.data, [0.1, 0.5, 0.9]
+                    ),
+                }
+            )
+
+    for K, diag in zip(outputs, diagnostics):
+        diag.update(kernel_diagnostics(K))
+        diag["geometry_normalisation"] = geometry_normalisation
+    return outputs, diagnostics
 
 
 def adjacency_to_variogram(K):
@@ -242,37 +381,10 @@ def spatial_statistic_kernels(
     graph_normalisation="symmetric",
     dtype=np.float64,
 ):
-    """Build comparable square spatial operators for one or more samples.
-
-    Parameters
-    ----------
-    coords
-        Sequence of ``(n_s, 2)`` coordinate matrices after any cell-type mask.
-    spatial_statistic
-        ``'mark_correlation'`` returns a zero-diagonal weighted adjacency.
-        ``'variogram'`` returns its graph Laplacian.
-    geometry_normalisation
-        ``'none'`` preserves the historical graph scale; ``'mass'`` fixes each
-        adjacency's total pair mass to ``n_s``; ``'distance'`` additionally
-        forces every sample to have the same weighted pair-distance profile.
-    distance_bins
-        Number of equal-width bins on ``[0, radius]`` used for distance
-        standardisation.
-
-    Returns
-    -------
-    operators, diagnostics
-        Lists aligned to ``coords``. Diagnostics describe the underlying pair
-        adjacency even when ``spatial_statistic='variogram'``.
-    """
+    """Build comparable square spatial operators for one or more samples."""
     if spatial_statistic not in VALID_SPATIAL_STATISTICS:
         raise ValueError(
             f"spatial_statistic must be one of {sorted(VALID_SPATIAL_STATISTICS)}"
-        )
-    if geometry_normalisation not in VALID_GEOMETRY_NORMALISATIONS:
-        raise ValueError(
-            "geometry_normalisation must be one of "
-            f"{sorted(VALID_GEOMETRY_NORMALISATIONS)}"
         )
     coords = [np.asarray(xy, dtype=dtype) for xy in coords]
     if not coords:
@@ -288,57 +400,101 @@ def spatial_statistic_kernels(
         )
         for xy in coords
     ]
-
-    if geometry_normalisation == "distance":
-        adjacency, diagnostics = _distance_standardise(
-            adjacency, coords, radius, distance_bins
-        )
-    else:
-        diagnostics = []
-        output = []
-        for K, xy in zip(adjacency, coords):
-            raw_mass = float(K.sum())
-            if geometry_normalisation == "mass":
-                K = _mass_standardise(K, K.shape[0])
-            C, distances = _edge_distances(K, xy)
-            output.append(K)
-            diagnostics.append(
-                {
-                    "raw_pair_mass": raw_mass,
-                    "pair_mass": float(K.sum()),
-                    "weighted_distance_quantiles": _weighted_quantiles(
-                        distances, C.data, [0.1, 0.5, 0.9]
-                    ),
-                }
-            )
-        adjacency = output
-
-    for K, diag in zip(adjacency, diagnostics):
-        diag.update(kernel_diagnostics(K))
-        diag["geometry_normalisation"] = geometry_normalisation
+    adjacency, diagnostics = standardise_pair_measures(
+        adjacency,
+        coords,
+        coords,
+        [len(xy) for xy in coords],
+        radius,
+        geometry_normalisation=geometry_normalisation,
+        distance_bins=distance_bins,
+    )
+    for diag in diagnostics:
         diag["spatial_statistic"] = spatial_statistic
 
     if spatial_statistic == "variogram":
-        operators = [adjacency_to_variogram(K).astype(dtype, copy=False) for K in adjacency]
-    else:
-        operators = [K.astype(dtype, copy=False) for K in adjacency]
-    return operators, diagnostics
+        operators = [
+            adjacency_to_variogram(K).astype(dtype, copy=False) for K in adjacency
+        ]
+        return operators, diagnostics
+    return [K.astype(dtype, copy=False) for K in adjacency], diagnostics
 
 
-def kernel_diagnostics(K):
-    K = K.tocsr()
-    row_degree = np.asarray(K.sum(axis=1)).ravel()
-    mean_degree = float(np.mean(row_degree)) if row_degree.size else 0.0
-    degree_cv = (
-        float(np.std(row_degree) / mean_degree) if row_degree.size and mean_degree > 0 else 0.0
+def cross_mark_correlation_kernels(
+    target_coords,
+    neighbour_coords,
+    radius,
+    *,
+    target_ids=None,
+    neighbour_ids=None,
+    geometry_normalisation="distance",
+    distance_bins=10,
+    graph_normalisation="symmetric",
+    dtype=np.float64,
+):
+    """Build geometry-standardised bipartite target-neighbour pair kernels.
+
+    Biological self-pairs are removed using original observation IDs before
+    row/column degree normalisation. The geometry target mass for sample ``s`` is
+    ``sqrt(n_target_s * n_neighbour_s)``, matching cross-program sample weighting.
+    """
+    target_coords = [np.asarray(xy, dtype=dtype) for xy in target_coords]
+    neighbour_coords = [np.asarray(xy, dtype=dtype) for xy in neighbour_coords]
+    if not target_coords or len(target_coords) != len(neighbour_coords):
+        raise ValueError("Target and neighbour coordinate lists must be non-empty and aligned")
+    if target_ids is None:
+        target_ids = [np.arange(len(xy), dtype=np.int64) for xy in target_coords]
+    if neighbour_ids is None:
+        # With no shared original ID space, no identities can safely be inferred.
+        neighbour_ids = [-(np.arange(len(xy), dtype=np.int64) + 1) for xy in neighbour_coords]
+    if len(target_ids) != len(target_coords) or len(neighbour_ids) != len(target_coords):
+        raise ValueError("Target/neighbour ID lists must align with coordinate lists")
+
+    adjacency = []
+    removed_identity_counts = []
+    for target_xy, neighbour_xy, row_ids, col_ids in zip(
+        target_coords, neighbour_coords, target_ids, neighbour_ids
+    ):
+        row_ids = np.asarray(row_ids)
+        col_ids = np.asarray(col_ids)
+        removed = int(np.intersect1d(row_ids, col_ids).size)
+        K = kernel_matrix_sparse(
+            target_xy,
+            radius,
+            coords_query=neighbour_xy,
+            dtype=dtype,
+            normalisation=graph_normalisation,
+            zero_diagonal=False,
+            row_ids=row_ids,
+            query_ids=col_ids,
+            exclude_identity_pairs=True,
+        )
+        adjacency.append(K)
+        removed_identity_counts.append(removed)
+
+    target_masses = [
+        np.sqrt(float(len(target_xy) * len(neighbour_xy)))
+        for target_xy, neighbour_xy in zip(target_coords, neighbour_coords)
+    ]
+    adjacency, diagnostics = standardise_pair_measures(
+        adjacency,
+        target_coords,
+        neighbour_coords,
+        target_masses,
+        radius,
+        geometry_normalisation=geometry_normalisation,
+        distance_bins=distance_bins,
     )
-    return {
-        "n_rows": int(K.shape[0]),
-        "n_cols": int(K.shape[1]),
-        "nnz": int(K.nnz),
-        "isolated_fraction": float(np.mean(np.diff(K.indptr) == 0)),
-        "total_edge_weight": float(K.sum()),
-        "mean_weighted_degree": mean_degree,
-        "median_weighted_degree": float(np.median(row_degree)) if row_degree.size else 0.0,
-        "weighted_degree_cv": degree_cv,
-    }
+    for diag, target_xy, neighbour_xy, removed in zip(
+        diagnostics, target_coords, neighbour_coords, removed_identity_counts
+    ):
+        diag.update(
+            {
+                "spatial_statistic": "mark_correlation",
+                "n_target": int(len(target_xy)),
+                "n_neighbour": int(len(neighbour_xy)),
+                "removed_identity_pairs": int(removed),
+                "removed_identity_pair_weight_raw": float(removed),
+            }
+        )
+    return [K.astype(dtype, copy=False) for K in adjacency], diagnostics

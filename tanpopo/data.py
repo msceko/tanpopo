@@ -7,7 +7,7 @@ import numpy as np
 import scipy.sparse as sp
 
 from tanpopo.covariates import compute_covariates
-from tanpopo.kernel import kernel_matrix_sparse, spatial_statistic_kernels
+from tanpopo.kernel import cross_mark_correlation_kernels, spatial_statistic_kernels
 from tanpopo.utils import as_list, get_counts_matrix, none_to_list, pd_dtype
 
 
@@ -216,6 +216,7 @@ class CrossSampleData:
     neighbour_idx: np.ndarray
     covariates_target: np.ndarray | None = None
     covariates_neighbour: np.ndarray | None = None
+    geometry_diagnostics: dict | None = None
 
     @property
     def n_target(self):
@@ -354,30 +355,27 @@ def prepare_samples(
         )
     ]
 
-def prepare_cross_sample(
+def _prepare_cross_sample_arrays(
     W,
     coords,
-    radius,
     target_mask,
     neighbour_mask,
     covariates=None,
     dtype=np.float64,
-    graph_normalisation="symmetric",
 ):
-    """Prepare one bipartite target-neighbour sample.
-
-    Target and neighbour masks may be disjoint or overlapping. If they are identical,
-    a square zero-diagonal graph is used, matching the single-sample cross workflow.
-    """
+    """Subset one sample into target/neighbour matrices without building pair weights."""
     W = sp.csr_matrix(W, dtype=dtype)
     coords = np.asarray(coords, dtype=dtype)
     n = W.shape[0]
+    if coords.shape[0] != n:
+        raise ValueError("W and coords must contain the same number of spots")
     target_mask = np.asarray(target_mask, dtype=bool)
     neighbour_mask = np.asarray(neighbour_mask, dtype=bool)
     if target_mask.shape != (n,) or neighbour_mask.shape != (n,):
         raise ValueError("target_mask and neighbour_mask must contain one value per spot")
     if not np.any(target_mask) or not np.any(neighbour_mask):
         raise ValueError("target_mask and neighbour_mask must each select at least one spot")
+
     target_idx = np.flatnonzero(target_mask)
     neighbour_idx = np.flatnonzero(neighbour_mask)
     W_target = sp.csr_matrix(W[target_idx], dtype=dtype)
@@ -390,36 +388,48 @@ def prepare_cross_sample(
         covariates = np.asarray(covariates, dtype=dtype)
         if covariates.ndim == 1:
             covariates = covariates[:, None]
+        if covariates.shape[0] != n:
+            raise ValueError("covariates must contain one row per spot")
         cov_target = covariates[target_idx]
         cov_neighbour = covariates[neighbour_idx]
 
-    if np.array_equal(target_idx, neighbour_idx):
-        K = kernel_matrix_sparse(
-            coords_target,
-            radius,
-            dtype=dtype,
-            normalisation=graph_normalisation,
-            zero_diagonal=True,
-        )
-    else:
-        K = kernel_matrix_sparse(
-            coords_target,
-            radius,
-            coords_query=coords_neighbour,
-            dtype=dtype,
-            normalisation=graph_normalisation,
-            zero_diagonal=False,
-        )
-
-    return CrossSampleData(
-        W_target=W_target,
-        W_neighbour=W_neighbour,
-        K=K,
-        target_idx=target_idx,
-        neighbour_idx=neighbour_idx,
-        covariates_target=cov_target,
-        covariates_neighbour=cov_neighbour,
+    return (
+        W_target,
+        W_neighbour,
+        coords_target,
+        coords_neighbour,
+        target_idx,
+        neighbour_idx,
+        cov_target,
+        cov_neighbour,
     )
+
+
+def prepare_cross_sample(
+    W,
+    coords,
+    radius,
+    target_mask,
+    neighbour_mask,
+    covariates=None,
+    dtype=np.float64,
+    graph_normalisation="symmetric",
+    geometry_normalisation="distance",
+    distance_bins=10,
+):
+    """Prepare one geometry-standardised bipartite target-neighbour sample."""
+    return prepare_cross_samples(
+        [W],
+        [coords],
+        radius,
+        [target_mask],
+        [neighbour_mask],
+        covariates=None if covariates is None else [covariates],
+        dtype=dtype,
+        graph_normalisation=graph_normalisation,
+        geometry_normalisation=geometry_normalisation,
+        distance_bins=distance_bins,
+    )[0]
 
 
 def prepare_cross_samples(
@@ -431,8 +441,10 @@ def prepare_cross_samples(
     covariates=None,
     dtype=np.float64,
     graph_normalisation="symmetric",
+    geometry_normalisation="distance",
+    distance_bins=10,
 ):
-    """Prepare matched target-neighbour data from multiple biological samples."""
+    """Prepare matched target-neighbour data with one shared pair-distance measure."""
     W = as_list(W)
     coords = as_list(coords)
     target_masks = as_list(target_masks)
@@ -441,22 +453,51 @@ def prepare_cross_samples(
     lengths = {len(W), len(coords), len(target_masks), len(neighbour_masks), len(covariates)}
     if lengths != {len(W)}:
         raise ValueError("W, coords, masks and covariates must contain the same number of samples")
-    return [
-        prepare_cross_sample(
-            w,
-            xy,
-            radius,
-            target_mask,
-            neighbour_mask,
-            cov,
-            dtype=dtype,
-            graph_normalisation=graph_normalisation,
-        )
-        for w, xy, target_mask, neighbour_mask, cov in zip(
+
+    prepared = [
+        _prepare_cross_sample_arrays(w, xy, target, neighbour, cov, dtype)
+        for w, xy, target, neighbour, cov in zip(
             W, coords, target_masks, neighbour_masks, covariates
         )
     ]
+    target_coords = [item[2] for item in prepared]
+    neighbour_coords = [item[3] for item in prepared]
+    target_ids = [item[4] for item in prepared]
+    neighbour_ids = [item[5] for item in prepared]
+    kernels, diagnostics = cross_mark_correlation_kernels(
+        target_coords,
+        neighbour_coords,
+        radius,
+        target_ids=target_ids,
+        neighbour_ids=neighbour_ids,
+        geometry_normalisation=geometry_normalisation,
+        distance_bins=distance_bins,
+        graph_normalisation=graph_normalisation,
+        dtype=dtype,
+    )
 
+    return [
+        CrossSampleData(
+            W_target=W_target,
+            W_neighbour=W_neighbour,
+            K=K,
+            target_idx=target_idx,
+            neighbour_idx=neighbour_idx,
+            covariates_target=cov_target,
+            covariates_neighbour=cov_neighbour,
+            geometry_diagnostics=diag,
+        )
+        for (
+            W_target,
+            W_neighbour,
+            _,
+            _,
+            target_idx,
+            neighbour_idx,
+            cov_target,
+            cov_neighbour,
+        ), K, diag in zip(prepared, kernels, diagnostics)
+    ]
 
 def _stack_cross_covariates(samples, side):
     attr = f"covariates_{side}"

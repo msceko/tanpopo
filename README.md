@@ -128,13 +128,18 @@ larger variogram along that gene program.
 
 ### `--geometry-normalisation`
 
-Three geometry treatments are available for square spatial workflows:
+Three geometry treatments are available for both square and bipartite spatial
+workflows:
 
-- `none`: preserve the historical graph scale after optional symmetric degree
-  normalisation;
-- `mass`: rescale each sample adjacency so `sum(A_s) = n_s`;
-- `distance` (default): additionally force every sample to have the same weighted
-  pair-distance profile.
+- `none`: preserve the historical graph scale after degree normalisation;
+- `mass`: fix the total pair mass to a workflow-specific reference;
+- `distance` (default): additionally force every biological sample to have the same
+  weighted pair-distance profile.
+
+For square programs the target pair mass is `n_s`. For target-neighbour cross programs
+it is `sqrt(n_target_s * n_neighbour_s)`. These choices are deliberate: the default
+multi-sample weights `1/n_s` and `1/sqrt(n_target_s*n_neighbour_s)` respectively cancel
+the normalised pair mass, so each tissue contributes one unit of total pair measure.
 
 For `distance`, `[0, radius]` is divided into `--distance-bins` equal-width shells.
 Let `m_sb` be sample `s`'s total pair weight in shell `b`. Bins not represented in
@@ -143,18 +148,17 @@ each sample's normalised shell profile on the common support. Each shell is then
 rescaled so
 
 \[
-\sum_{ij:\ d_{ij}\in B_b} A^*_{s,ij}=n_s q_b.
+\sum_{ij:\ d_{ij}\in B_b} A^*_{s,ij}=M_s q_b,
 \]
 
-Consequently
+where `M_s=n_s` for square programs and
+`M_s=sqrt(n_target_s*n_neighbour_s)` for cross programs. Consequently
 
 \[
-\sum_{ij} A^*_{s,ij}=n_s
+\sum_{ij} A^*_{s,ij}=M_s.
 \]
 
-in every sample, and the default `1/n_s` sample weighting compares the same
-pair-distance measure across tissues. With only one sample, `distance` reduces exactly
-to total-mass normalisation.
+With only one sample, `distance` reduces exactly to total-mass normalisation.
 
 This standardisation changes the **measurement distribution over cell pairs**, not the
 expression values themselves. It therefore does not regress away genuine expression
@@ -178,8 +182,10 @@ the variogram statistic.
 
 Geometry diagnostics (pair mass, weighted-degree CV, weighted distance quantiles, and
 when applicable the shell masses/reference weights) are stored under the analysis
-metadata in `uns['tanpopo']`. Classical observation-window edge corrections are not
-implemented because Tanpopo currently receives cell coordinates but not a reliable
+metadata in `uns['tanpopo']`. Bipartite diagnostics report target/row and
+neighbour/column connectivity separately and record removed identity pairs when the
+target and neighbour masks overlap. Classical observation-window edge corrections are
+not implemented because Tanpopo currently receives cell coordinates but not a reliable
 tissue observation window/mask.
 
 ## Three explicit gene-space objectives
@@ -330,7 +336,9 @@ tanpopo cross-programs \
   --neighbour-labels Macrophages \
   --radius 30 \
   --components 5 \
-  --objective covariance
+  --objective covariance \
+  --geometry-normalisation distance \
+  --distance-bins 10
 ```
 
 This estimates the bipartite cross-covariance
@@ -350,9 +358,24 @@ Outputs:
 - `uns['tanpopo'][<id>]['singular_values']`
 
 The bipartite graph uses the same Wendland kernel with row/column degree
-normalisation. `cross-programs` and `shared-cross-programs` remain cross-covariance
-methods: the square-graph mark-variogram and geometry-standardisation options are not
-applied to rectangular target-neighbour operators.
+normalisation. Cross programs remain **mark-covariance** methods rather than
+variograms, but their pair geometry is standardised by the same pair-measure machinery
+as square programs. For sample `s`, distance-bin masses are reweighted to the common
+reference `q_b` with total mass
+
+\[
+M_s=\sqrt{n_{t,s}n_{u,s}}.
+\]
+
+Thus `--geometry-normalisation distance` compares target-neighbour expression
+relationships under the same distribution of physical separations across tissues.
+`--geometry-normalisation mass` fixes only total pair mass, while `none` recovers the
+historical rectangular-kernel scale.
+
+If target and neighbour masks overlap, a cell is never paired with itself: identity
+pairs are detected by the original observation index and removed **before** row/column
+degree normalisation. This is the bipartite analogue of the zero diagonal in square
+programs.
 
 ### 5. Shared target-neighbour programs across samples
 
@@ -370,7 +393,9 @@ tanpopo shared-cross-programs \
   --neighbour-labels Macrophages \
   --radius 30 \
   --components 5 \
-  --objective covariance
+  --objective covariance \
+  --geometry-normalisation distance \
+  --distance-bins 10
 ```
 
 The pooled operator is
@@ -382,13 +407,15 @@ C_{\mathrm{shared}} = \sum_s w_s\,Y_{t,s}^T A_{tu,s}Y_{u,s}.
 With the default `--sample-weighting n_spots`,
 
 \[
-w_s = \frac{1}{\sqrt{n_{t,s}n_{u,s}}},
+w_s = \frac{1}{\sqrt{n_{t,s}n_{u,s}}}.
 \]
 
-so a large tissue does not dominate solely because it contains more target or neighbour
-cells. `--sample-weighting none` gives every observed cell pair its unscaled
-contribution. The same `covariance`, `gene_standardized`, and `gain` objectives are
-available as for single-sample cross programs.
+Under `mass` or `distance` geometry normalisation, the standardised cross kernel has
+`sum(A_tu,s)=sqrt(n_t,s*n_u,s)`, so `w_s sum(A_tu,s)=1` for every biological sample.
+With `distance`, the samples additionally share the same target-neighbour distance
+profile. `--sample-weighting none` is still available when this balancing is not
+desired. The same `covariance`, `gene_standardized`, and `gain` gene-space objectives
+are available as for single-sample cross programs.
 
 In addition to the shared target/neighbour loadings, Tanpopo stores each shared mode's
 raw cross-spatial covariance in every biological sample. This is useful for checking
@@ -540,7 +567,12 @@ Cross-population programs:
 ```python
 from tanpopo import CrossSpatialProgramModel
 
-model = CrossSpatialProgramModel(30, objective="gain").fit(
+model = CrossSpatialProgramModel(
+    30,
+    objective="gain",
+    geometry_normalisation="distance",
+    distance_bins=10,
+).fit(
     X,
     coords,
     n_components=5,
@@ -554,7 +586,12 @@ Shared cross-population programs:
 ```python
 from tanpopo import SharedCrossSpatialProgramModel
 
-model = SharedCrossSpatialProgramModel(30, objective="covariance").fit(
+model = SharedCrossSpatialProgramModel(
+    30,
+    objective="covariance",
+    geometry_normalisation="distance",
+    distance_bins=10,
+).fit(
     [X1, X2, X3],
     [coords1, coords2, coords3],
     n_components=5,

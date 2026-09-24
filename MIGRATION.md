@@ -2,15 +2,19 @@
 
 ## Geometry-standardised spatial statistics
 
-Square spatial workflows now expose two independent choices:
+Square spatial workflows expose two independent choices:
 
 - `--spatial-statistic mark_correlation|variogram`;
 - `--geometry-normalisation none|mass|distance`.
 
+`cross-programs` and `shared-cross-programs` now expose the same geometry-normalisation
+choice, but remain mark-covariance/SVD methods rather than variograms.
+
 `distance` is the new default. It reweights distance shells to a shared reference
-profile across biological samples and fixes each sample's total pair mass to its
-number of selected cells. This changes eigenvalue/statistic scales relative to the
-historical raw graph, although single-sample mark-correlation loadings are unchanged
+profile across biological samples and fixes each sample's total pair mass to a
+workflow-specific reference (`n_s` for square graphs and
+`sqrt(n_target*n_neighbour)` for cross graphs). This changes eigenvalue/statistic scales
+relative to the historical raw graph, although single-sample mark-correlation loadings are unchanged
 up to numerical eigensolver variation because one-sample distance normalisation is a
 global graph rescaling. Use `--geometry-normalisation none` to recover the previous
 graph scaling.
@@ -18,6 +22,14 @@ graph scaling.
 The base mark-correlation adjacency remains zero-diagonal. `variogram` converts the
 same pair weights to `L = D - A`; its diagonal is therefore part of the variogram
 operator rather than a restored self-edge.
+
+For cross programs, the normalised bipartite pair mass is
+`sqrt(n_target*n_neighbour)`, matching the reciprocal default sample weight. Distance
+normalisation learns one common target-neighbour distance profile across samples. If
+target and neighbour masks overlap, same-observation pairs are now removed before
+bipartite degree normalisation; use `--geometry-normalisation none` to retain historical
+pair scaling, but biological self-pairs remain excluded under the zero-self-edge
+semantics.
 
 Multi-sample workflows no longer estimate an omitted radius from the first sample
 only. The fallback is based on the median sample nearest-neighbour spacing; an explicit

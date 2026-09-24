@@ -9,6 +9,12 @@
 - Added pair-geometry diagnostics and generic spatial-statistic output keys.
 - Added numerical tests for geometry balancing, variogram identities, null centering,
   differential variogram recovery, and variogram label decomposition.
+- Generalised pair-measure geometry standardisation to rectangular target-neighbour
+  kernels; cross programs now support `none`, `mass`, and shared distance-profile
+  normalisation with target mass `sqrt(n_target*n_neighbour)`.
+- Cross workflows remove overlapping target/neighbour self-pairs by original
+  observation ID before bipartite degree normalisation and report separate row/column
+  geometry diagnostics.
 
 # Changelog
 
