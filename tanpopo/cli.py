@@ -29,11 +29,6 @@ class GraphNormalisationTypes(str, Enum):
     none = "none"
 
 
-class SpatialStatisticTypes(str, Enum):
-    mark_correlation = "mark_correlation"
-    variogram = "variogram"
-
-
 class GeometryNormalisationTypes(str, Enum):
     none = "none"
     mass = "mass"
@@ -67,8 +62,12 @@ InputPathsB = Annotated[
     typer.Option("--input-b", "-ib", exists=True, dir_okay=False, readable=True),
 ]
 OutputPath = Annotated[Path | None, typer.Option("--output", "-o", dir_okay=False)]
-Layer = Annotated[str | None, typer.Option("--layer", help="AnnData layer to analyse instead of X.")]
-LabelKey = Annotated[str | None, typer.Option("--label-key", help="obs column defining cell types.")]
+Layer = Annotated[
+    str | None, typer.Option("--layer", help="AnnData layer to analyse instead of X.")
+]
+LabelKey = Annotated[
+    str | None, typer.Option("--label-key", help="obs column defining cell types.")
+]
 Labels = Annotated[
     str | None,
     typer.Option(
@@ -76,17 +75,49 @@ Labels = Annotated[
         help="Cell type(s) to analyse, comma separated. 'all' analyses each label separately.",
     ),
 ]
-TargetLabels = Annotated[str, typer.Option("--target-labels", help="Target cell label(s), comma separated.")]
+TargetLabels = Annotated[
+    str,
+    typer.Option("--target-labels", help="Target cell label(s), comma separated."),
+]
 NeighbourLabels = Annotated[
     str, typer.Option("--neighbour-labels", help="Neighbour cell label(s), comma separated.")
 ]
-SampleNames = Annotated[list[str] | None, typer.Option("--name", help="Name for each input sample.")]
+SampleNames = Annotated[
+    list[str] | None, typer.Option("--name", help="Name for each input sample.")
+]
 ExperimentId = Annotated[
     str,
-    typer.Option("--experiment-id", "--cmd-id", "-id", help="Namespace for Tanpopo outputs."),
+    typer.Option("--analysis-id", "-id", help="Identifier for Tanpopo outputs."),
 ]
 Radius = Annotated[float | None, typer.Option("--radius", "-r", help="Wendland support radius.")]
-Components = Annotated[int, typer.Option("--components", "-k", help="Number of programs.")]
+Components = Annotated[
+    str,
+    typer.Option(
+        "--components",
+        "-k",
+        help="Number of programs, or 'auto' for permutation-selected modes.",
+    ),
+]
+FixedComponents = Annotated[
+    int, typer.Option("--components", "-k", min=1, help="Number of programs.")
+]
+MaxComponents = Annotated[
+    int,
+    typer.Option(
+        "--max-components",
+        min=1,
+        help="Maximum number of modes fitted when --components auto is used.",
+    ),
+]
+ModeAlpha = Annotated[
+    float,
+    typer.Option(
+        "--mode-alpha",
+        min=0.0,
+        max=1.0,
+        help="FWER level for automatic mode selection; must lie strictly between 0 and 1.",
+    ),
+]
 Objective = Annotated[
     ObjectiveTypes,
     typer.Option(
@@ -109,13 +140,6 @@ GraphNormalisation = Annotated[
     GraphNormalisationTypes,
     typer.Option("--graph-normalisation", help="Spatial graph degree normalisation."),
 ]
-SpatialStatistic = Annotated[
-    SpatialStatisticTypes,
-    typer.Option(
-        "--spatial-statistic",
-        help="Pair statistic: mark_correlation or variogram.",
-    ),
-]
 GeometryNormalisation = Annotated[
     GeometryNormalisationTypes,
     typer.Option(
@@ -131,13 +155,6 @@ DistanceBins = Annotated[
         help="Equal-width distance bins used by geometry-normalisation=distance.",
     ),
 ]
-NullCenter = Annotated[
-    bool,
-    typer.Option(
-        "--null-center/--no-null-center",
-        help="Subtract the exact random-labelling baseline for mark correlation.",
-    ),
-]
 SpotOperator = Annotated[
     SpotOperatorTypes,
     typer.Option("--operator", help="Spot-space centering: sample, label, or none."),
@@ -145,13 +162,6 @@ SpotOperator = Annotated[
 SampleWeighting = Annotated[
     SampleWeightingTypes,
     typer.Option("--sample-weighting", help="How biological samples are balanced."),
-]
-Alpha = Annotated[
-    float | None,
-    typer.Option(
-        "--alpha",
-        help="Deprecated. alpha=0 maps to objective=covariance; nonzero alpha is unsupported.",
-    ),
 ]
 Transform = Annotated[TransformTypes | None, typer.Option("--transform")]
 MinCounts = Annotated[int | None, typer.Option("--min-counts")]
@@ -172,5 +182,12 @@ Exclude = Annotated[str | None, typer.Option("--exclude")]
 Dtype = Annotated[Dtypes, typer.Option("--dtype")]
 Verbose = Annotated[bool, typer.Option("--verbose")]
 
-Permutations = Annotated[int, typer.Option("--permutations", help="Sample-label permutations for differential FWER p-values.")]
+Permutations = Annotated[
+    int,
+    typer.Option(
+        "--permutations",
+        min=0,
+        help="Permutation replicates for mode inference; required by --components auto.",
+    ),
+]
 RandomSeed = Annotated[int, typer.Option("--seed", help="Random seed.")]

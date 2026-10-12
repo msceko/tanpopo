@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import scipy.sparse as sp
 from scipy.linalg import eigh, svd
@@ -12,7 +14,8 @@ from tanpopo.data import (
     prepare_cross_samples,
     prepare_samples,
 )
-from tanpopo.kernel import VALID_GEOMETRY_NORMALISATIONS, VALID_SPATIAL_STATISTICS
+from tanpopo.geometry import VALID_GEOMETRY_NORMALISATIONS
+from tanpopo.inference import select_modes
 from tanpopo.operators import (
     BetweenLabelTransform,
     BilinearGeneOperator,
@@ -24,7 +27,7 @@ from tanpopo.operators import (
     WithinLabelTransform,
     expression_scale_from_variance,
     gene_expression_variance,
-    gene_spatial_statistic_diag,
+    gene_spatial_covariance_diag,
     projected_svd,
 )
 from tanpopo.projection import SpotProjector
@@ -49,9 +52,8 @@ def _group_contrast_coefficients(n_samples, positive_samples, negative_samples):
         raise ValueError("positive_samples contains an out-of-range sample index")
     if np.any(negative < 0) or np.any(negative >= n_samples):
         raise ValueError("negative_samples contains an out-of-range sample index")
-    repeated = (
-        len(np.unique(positive)) != len(positive)
-        or len(np.unique(negative)) != len(negative)
+    repeated = len(np.unique(positive)) != len(positive) or len(np.unique(negative)) != len(
+        negative
     )
     if repeated:
         raise ValueError("Sample indices must not be repeated within a differential group")
@@ -82,26 +84,10 @@ def _sample_weights(samples, mode):
     raise ValueError("sample_weighting must be 'none' or 'n_spots'")
 
 
-def _sample_statistic_kernel(sample, null_center=False):
-    K = sample.K
-    if not null_center:
-        return K
-    if sample.n_spots < 2:
-        raise ValueError("null centering requires at least two spots per sample")
-    pair_mass = float(sample.geometry_diagnostics["pair_mass"])
-    correction = pair_mass / (sample.n_spots * (sample.n_spots - 1))
-    # This diagonal is an analytical random-labelling correction, not a self-edge:
-    # for sample-centred marks E_pi[Y_pi^T A Y_pi] = -correction * Y^T Y.
-    return (K + correction * sp.eye(sample.n_spots, format="csr", dtype=K.dtype)).tocsr()
-
-
-def _weighted_block_kernel(samples, weights, signs=None, null_center=False):
+def _weighted_block_kernel(samples, weights, signs=None):
     signs = np.ones(len(samples)) if signs is None else np.asarray(signs, dtype=float)
     return sp.block_diag(
-        [
-            float(w * sign) * _sample_statistic_kernel(s, null_center=null_center)
-            for s, w, sign in zip(samples, weights, signs)
-        ],
+        [float(w * sign) * sample.K for sample, w, sign in zip(samples, weights, signs)],
         format="csr",
     )
 
@@ -176,6 +162,35 @@ def _split_spot_modes(phi, samples):
     return output
 
 
+def _random_label_permutation(sample, rng, within_labels=False):
+    """Permutation of spatial identities for a prepared sample."""
+    if not within_labels:
+        return rng.permutation(sample.n_spots)
+    permutation = np.arange(sample.n_spots)
+    for offset, length in zip(sample.labels_groups.offsets, sample.labels_groups.lengths):
+        indices = np.arange(int(offset), int(offset + length))
+        permutation[indices] = rng.permutation(indices)
+    return permutation
+
+
+def _permuted_square_samples(samples, rng, within_labels=False):
+    output = []
+    for sample in samples:
+        permutation = _random_label_permutation(sample, rng, within_labels=within_labels)
+        K = sample.K[permutation][:, permutation].tocsr()
+        output.append(replace(sample, K=K))
+    return output
+
+
+def _permuted_cross_samples(samples, rng):
+    output = []
+    for sample in samples:
+        permutation = rng.permutation(sample.n_neighbour)
+        K = sample.K[:, permutation].tocsr()
+        output.append(replace(sample, K=K))
+    return output
+
+
 def _solve_gene_operator(op, n_components, signed=False, tol=0, maxiter=None):
     g = op.shape[0]
     k = min(int(n_components), g - 1)
@@ -195,23 +210,21 @@ def _solve_dense(H, n_components, signed=False):
 
 
 class SpatialProgramModel:
-    """Conditional multigene programs from a spatial pair statistic.
+    """Geometry-standardised multigene spatial covariance programs.
 
-    ``spatial_statistic='mark_correlation'`` uses weighted cross-cell products,
-    while ``'variogram'`` uses weighted pairwise squared differences through the
-    corresponding graph Laplacian. Geometry normalisation is performed before
-    either statistic reaches the gene-space eigensolver.
+    The core statistic is a zero-self-edge pair covariance ``Y.T @ A @ Y``.
+    Geometry normalisation is applied to ``A`` before expression enters the
+    gene-space eigensolver.
 
     Objectives
     ----------
     covariance
-        Historical name for the unstandardised gene-space statistic. For mark
-        correlation this maximises v^T Y^T A Y v; for variogram it maximises
-        v^T Y^T L Y v.
+        Maximise the geometry-standardised cross-cell spatial covariance
+        ``v.T @ Y.T @ A @ Y @ v``.
     gene_standardized
         The same numerator after scaling each gene by ordinary residual expression
-        variance. Unlike the historical alpha=1 path, the denominator is positive
-        expression variance rather than spatial autocovariance.
+        variance. The denominator is positive expression variance rather than spatial
+        autocovariance.
     gain
         Solve the spatial-gain generalized problem on a truncated expression
         subspace: Y^T A Y v = lambda (Y^T Y + ridge I) v.
@@ -226,10 +239,8 @@ class SpatialProgramModel:
         expression_rank=50,
         gain_ridge=1e-8,
         graph_normalisation="symmetric",
-        spatial_statistic="mark_correlation",
         geometry_normalisation="distance",
         distance_bins=10,
-        null_center=False,
         covariates_tol=1e-10,
         block_size=256,
         dtype=np.float64,
@@ -237,23 +248,12 @@ class SpatialProgramModel:
     ):
         if objective not in VALID_OBJECTIVES:
             raise ValueError(f"objective must be one of {sorted(VALID_OBJECTIVES)}")
-        if spatial_statistic not in VALID_SPATIAL_STATISTICS:
-            raise ValueError(
-                f"spatial_statistic must be one of {sorted(VALID_SPATIAL_STATISTICS)}"
-            )
         if geometry_normalisation not in VALID_GEOMETRY_NORMALISATIONS:
             raise ValueError(
-                "geometry_normalisation must be one of "
-                f"{sorted(VALID_GEOMETRY_NORMALISATIONS)}"
+                "geometry_normalisation must be one of " f"{sorted(VALID_GEOMETRY_NORMALISATIONS)}"
             )
         if int(distance_bins) < 1:
             raise ValueError("distance_bins must be positive")
-        if null_center and spatial_statistic != "mark_correlation":
-            raise ValueError(
-                "null_center is only defined for spatial_statistic='mark_correlation'"
-            )
-        if null_center and spot_operator == "none":
-            raise ValueError("null_center requires sample- or label-centred expression")
         self.radius = float(radius)
         self.objective = objective
         self.spot_operator = spot_operator
@@ -261,10 +261,8 @@ class SpatialProgramModel:
         self.expression_rank = int(expression_rank)
         self.gain_ridge = float(gain_ridge)
         self.graph_normalisation = graph_normalisation
-        self.spatial_statistic = spatial_statistic
         self.geometry_normalisation = geometry_normalisation
         self.distance_bins = int(distance_bins)
-        self.null_center = bool(null_center)
         self.covariates_tol = covariates_tol
         self.block_size = block_size
         self.dtype = np.dtype(dtype)
@@ -292,7 +290,6 @@ class SpatialProgramModel:
                 masks=masks,
                 dtype=self.dtype,
                 graph_normalisation=self.graph_normalisation,
-                spatial_statistic=self.spatial_statistic,
                 geometry_normalisation=self.geometry_normalisation,
                 distance_bins=self.distance_bins,
             )
@@ -316,9 +313,7 @@ class SpatialProgramModel:
     def _concatenated_state(self, signs=None):
         Wc, _, sample_groups, label_groups, covc = concatenate_samples(self.samples)
         weights = _sample_weights(self.samples, self.sample_weighting)
-        K = _weighted_block_kernel(
-            self.samples, weights, signs=signs, null_center=self.null_center
-        )
+        K = _weighted_block_kernel(self.samples, weights, signs=signs)
         spec = SpotOperatorSpec(self.spot_operator)
         S = spec.build(
             K,
@@ -357,20 +352,16 @@ class SpatialProgramModel:
         self.gene_loadings = loadings
         self.spot_modes = _split_spot_modes(phi, self.samples)
         self.gene_scores = loadings * np.sqrt(np.maximum(np.abs(vals), 1e-12))[None, :]
-        self.gene_spatial_scores_ = gene_spatial_statistic_diag(
-            Wc, S, block_size=self.block_size
-        )
+        self.gene_spatial_scores_ = gene_spatial_covariance_diag(Wc, S, block_size=self.block_size)
         self.sample_coefficients_ = weights * (
             np.ones(len(weights)) if signs is None else np.asarray(signs, dtype=float)
         )
 
-    def _fit_gain(self, n_components, signs, signed, tol):
+    def _prepare_gain_basis(self, n_components, tol):
+        """Cache the expression-side basis shared by all spatial permutations."""
         Wc, _, sample_groups, label_groups, covc = concatenate_samples(self.samples)
         weights = _sample_weights(self.samples, self.sample_weighting)
-        base_K = sp.block_diag(
-            [_sample_statistic_kernel(s, null_center=self.null_center) for s in self.samples],
-            format="csr",
-        )
+        base_K = sp.block_diag([sample.K for sample in self.samples], format="csr")
         spec = SpotOperatorSpec(self.spot_operator)
         S_base = spec.build(
             base_K,
@@ -390,55 +381,151 @@ class SpatialProgramModel:
             dtype=self.dtype,
             tol=tol,
         )
-        ridge = self.gain_ridge
-        denom = np.sqrt(np.square(singular) + ridge)
+        denom = np.sqrt(np.square(singular) + self.gain_ridge)
         gain_scale = np.divide(singular, denom, out=np.zeros_like(singular), where=denom > 0)
+        cache = {
+            "Wc": Wc,
+            "sample_groups": sample_groups,
+            "label_groups": label_groups,
+            "covariates": covc,
+            "weights": weights,
+            "spec": spec,
+            "S_base": S_base,
+            "U": U,
+            "singular": singular,
+            "Vt": Vt,
+            "denom": denom,
+            "gain_scale": gain_scale,
+        }
+        self._gain_basis_ = cache
+        return cache
 
-        signs_array = (
-            np.ones(len(self.samples))
-            if signs is None
-            else np.asarray(signs, dtype=float)
-        )
-        # In weighted expression coordinates the base sample weights cancel, leaving
-        # only the sign/contrast coefficient in the compressed spatial numerator.
+    def _gain_solve(self, cache, kernels, coefficients, n_components, signed):
         K_signed = sp.block_diag(
-            [
-                float(sign)
-                * _sample_statistic_kernel(s, null_center=self.null_center)
-                for s, sign in zip(self.samples, signs_array)
-            ],
+            [float(coefficient) * K for K, coefficient in zip(kernels, coefficients)],
             format="csr",
         )
-        S_signed = spec.build(
+        S_signed = cache["spec"].build(
             K_signed,
-            sample_groups=sample_groups,
-            label_groups=label_groups,
-            covariates=covc,
+            sample_groups=cache["sample_groups"],
+            label_groups=cache["label_groups"],
+            covariates=cache["covariates"],
             tol=self.covariates_tol,
             dtype=self.dtype,
         )
+        U = cache["U"]
+        gain_scale = cache["gain_scale"]
         H0 = U.T @ S_signed.apply(U)
         H = gain_scale[:, None] * H0 * gain_scale[None, :]
-        vals, a = _solve_dense(H, n_components, signed=signed)
+        return _solve_dense(H, n_components, signed=signed)
 
-        loadings = Vt.T @ ((1.0 / np.maximum(denom, 1e-12))[:, None] * a)
+    def _fit_gain(self, n_components, signs, signed, tol):
+        cache = self._prepare_gain_basis(n_components, tol)
+        coefficients = (
+            np.ones(len(self.samples), dtype=float)
+            if signs is None
+            else np.asarray(signs, dtype=float)
+        )
+        vals, a = self._gain_solve(
+            cache,
+            [sample.K for sample in self.samples],
+            coefficients,
+            n_components,
+            signed,
+        )
+        denom = cache["denom"]
+        loadings = cache["Vt"].T @ ((1.0 / np.maximum(denom, 1e-12))[:, None] * a)
         loadings = column_normalize(loadings)
-        phi = S_base.projector.apply(Wc @ loadings)
+        phi = cache["S_base"].projector.apply(cache["Wc"] @ loadings)
 
         self.eigenvalues = vals
         self.eigenvectors = a
         self.gene_loadings = loadings
         self.spot_modes = _split_spot_modes(phi, self.samples)
         self.gene_scores = loadings * np.sqrt(np.maximum(np.abs(vals), 1e-12))[None, :]
-        # Report the unweighted spatial statistic per gene for diagnostics.
-        self.gene_spatial_scores_ = gene_spatial_statistic_diag(
-            Wc, S_base, block_size=self.block_size
+        self.gene_spatial_scores_ = gene_spatial_covariance_diag(
+            cache["Wc"], cache["S_base"], block_size=self.block_size
         )
-        self.expression_singular_values_ = singular
-        self.sample_coefficients_ = weights * signs_array
+        self.expression_singular_values_ = cache["singular"]
+        self.sample_coefficients_ = cache["weights"] * coefficients
 
     def gene_spatial_scores(self):
         return self.gene_spatial_scores_.copy()
+
+    def truncate_modes(self, n_modes):
+        """Keep the first ``n_modes`` fitted programs, allowing zero."""
+        n_modes = int(n_modes)
+        if n_modes < 0 or n_modes > len(self.eigenvalues):
+            raise ValueError("n_modes is outside the fitted mode range")
+        self.eigenvalues = self.eigenvalues[:n_modes]
+        self.gene_loadings = self.gene_loadings[:, :n_modes]
+        self.gene_scores = self.gene_scores[:, :n_modes]
+        self.eigenvectors = self.eigenvectors[:, :n_modes]
+        self.spot_modes = [mode[:, :n_modes] for mode in self.spot_modes]
+        if hasattr(self, "permutation_pvalues_"):
+            self.permutation_pvalues_ = self.permutation_pvalues_[:n_modes]
+        self.selected_modes_ = n_modes
+        return self
+
+    def permutation_test(self, n_permutations=100, seed=0, tol=0, maxiter=None):
+        """Random-label max-eigenvalue test for fitted spatial programs.
+
+        Spatial identities are permuted independently within biological samples.
+        For label-centred analyses the permutation is restricted within labels,
+        testing residual spatial information beyond the label structure.
+        """
+        n_permutations = int(n_permutations)
+        if n_permutations <= 0:
+            self.permutation_pvalues_ = np.full(len(self.eigenvalues), np.nan)
+            self.permutation_max_eigenvalues_ = np.empty(0)
+            return self.permutation_pvalues_
+        rng = np.random.default_rng(seed)
+        k = len(self.eigenvalues)
+        null = np.empty(n_permutations, dtype=float)
+        within_labels = self.spot_operator == "label"
+        for b in range(n_permutations):
+            samples = _permuted_square_samples(self.samples, rng, within_labels=within_labels)
+            if self.objective == "gain":
+                values, _ = self._gain_solve(
+                    self._gain_basis_,
+                    [sample.K for sample in samples],
+                    np.ones(len(samples), dtype=float),
+                    k,
+                    signed=False,
+                )
+                null[b] = float(values[0])
+                continue
+            tmp = SpatialProgramModel(
+                self.radius,
+                objective=self.objective,
+                spot_operator=self.spot_operator,
+                sample_weighting=self.sample_weighting,
+                expression_rank=self.expression_rank,
+                gain_ridge=self.gain_ridge,
+                graph_normalisation=self.graph_normalisation,
+                geometry_normalisation=self.geometry_normalisation,
+                distance_bins=self.distance_bins,
+                covariates_tol=self.covariates_tol,
+                block_size=self.block_size,
+                dtype=self.dtype,
+                verbose=False,
+            )
+            tmp.samples = samples
+            tmp._fit_covariance(k, signs=None, signed=False, tol=tol, maxiter=maxiter)
+            null[b] = float(tmp.eigenvalues[0])
+        observed = np.asarray(self.eigenvalues, dtype=float)
+        selection = select_modes(observed, null, alpha=0.05)
+        self.permutation_max_eigenvalues_ = null
+        self.permutation_pvalues_ = selection.pvalues
+        return self.permutation_pvalues_
+
+    def select_modes(self, alpha=0.05):
+        if not hasattr(self, "permutation_max_eigenvalues_"):
+            raise RuntimeError("Run permutation_test before select_modes")
+        observed = getattr(self, "_selection_observed_", self.eigenvalues)
+        selection = select_modes(observed, self.permutation_max_eigenvalues_, alpha=alpha)
+        self.mode_selection_ = selection
+        return selection
 
 
 class SharedSpatialProgramModel(SpatialProgramModel):
@@ -462,9 +549,7 @@ class DifferentialSpatialProgramModel(SpatialProgramModel):
 
     def fit(self, W, coords, n_components, labels=None, covariates=None, masks=None, **kwargs):
         n = len(W) if isinstance(W, (list, tuple)) else 1
-        contrast = _group_contrast_coefficients(
-            n, self.positive_samples, self.negative_samples
-        )
+        contrast = _group_contrast_coefficients(n, self.positive_samples, self.negative_samples)
         result = super().fit(
             W,
             coords,
@@ -493,6 +578,16 @@ class DifferentialSpatialProgramModel(SpatialProgramModel):
         null = np.empty(n_permutations, dtype=float)
         for b in range(n_permutations):
             contrast = _permuted_group_contrast(rng, n, n_positive)
+            if self.objective == "gain":
+                values, _ = self._gain_solve(
+                    self._gain_basis_,
+                    [sample.K for sample in self.samples],
+                    contrast,
+                    k,
+                    signed=True,
+                )
+                null[b] = np.max(np.abs(values))
+                continue
             tmp = SpatialProgramModel(
                 self.radius,
                 objective=self.objective,
@@ -501,28 +596,23 @@ class DifferentialSpatialProgramModel(SpatialProgramModel):
                 expression_rank=self.expression_rank,
                 gain_ridge=self.gain_ridge,
                 graph_normalisation=self.graph_normalisation,
-                spatial_statistic=self.spatial_statistic,
                 geometry_normalisation=self.geometry_normalisation,
                 distance_bins=self.distance_bins,
-                null_center=self.null_center,
                 covariates_tol=self.covariates_tol,
                 block_size=self.block_size,
                 dtype=self.dtype,
                 verbose=False,
             )
             tmp.samples = self.samples
-            if self.objective == "gain":
-                tmp._fit_gain(k, signs=contrast, signed=True, tol=tol)
-            else:
-                tmp._fit_covariance(
-                    k, signs=contrast, signed=True, tol=tol, maxiter=maxiter
-                )
+            tmp._fit_covariance(k, signs=contrast, signed=True, tol=tol, maxiter=maxiter)
             null[b] = np.max(np.abs(tmp.eigenvalues))
         observed = np.abs(self.eigenvalues)
         pvalues = (1.0 + np.sum(null[:, None] >= observed[None, :], axis=0)) / (
             n_permutations + 1.0
         )
         self.permutation_max_abs_eigenvalues_ = null
+        self.permutation_max_eigenvalues_ = null
+        self._selection_observed_ = observed
         self.permutation_pvalues_ = pvalues
         return pvalues
 
@@ -549,8 +639,7 @@ class _CrossSpatialProgramBase:
             raise ValueError(f"objective must be one of {sorted(VALID_OBJECTIVES)}")
         if geometry_normalisation not in VALID_GEOMETRY_NORMALISATIONS:
             raise ValueError(
-                "geometry_normalisation must be one of "
-                f"{sorted(VALID_GEOMETRY_NORMALISATIONS)}"
+                "geometry_normalisation must be one of " f"{sorted(VALID_GEOMETRY_NORMALISATIONS)}"
             )
         if int(distance_bins) < 1:
             raise ValueError("distance_bins must be positive")
@@ -560,7 +649,6 @@ class _CrossSpatialProgramBase:
         self.expression_rank = int(expression_rank)
         self.gain_ridge = float(gain_ridge)
         self.graph_normalisation = graph_normalisation
-        self.spatial_statistic = "mark_correlation"
         self.geometry_normalisation = geometry_normalisation
         self.distance_bins = int(distance_bins)
         self.covariates_tol = covariates_tol
@@ -656,9 +744,7 @@ class _CrossSpatialProgramBase:
             neighbour_scale = _cross_row_scale(samples, weights, "neighbour")
             W_target_scaled = sp.diags(target_scale, format="csr") @ W_target
             W_neighbour_scaled = sp.diags(neighbour_scale, format="csr") @ W_neighbour
-            var_target = gene_expression_variance(
-                W_target_scaled, Pt, self.block_size, eps=1e-12
-            )
+            var_target = gene_expression_variance(W_target_scaled, Pt, self.block_size, eps=1e-12)
             var_neighbour = gene_expression_variance(
                 W_neighbour_scaled, Pu, self.block_size, eps=1e-12
             )
@@ -691,15 +777,13 @@ class _CrossSpatialProgramBase:
         order = np.argsort(singular)[::-1]
         singular, U, Vt = singular[order], U[:, order], Vt[order]
         target_loadings = U if scale_target is None else scale_target[:, None] * U
-        neighbour_loadings = (
-            Vt.T if scale_neighbour is None else scale_neighbour[:, None] * Vt.T
-        )
+        neighbour_loadings = Vt.T if scale_neighbour is None else scale_neighbour[:, None] * Vt.T
         self.singular_values = singular
         self.target_loadings, self.neighbour_loadings = _orient_cross_pairs(
             target_loadings, neighbour_loadings
         )
 
-    def _fit_gain(
+    def _prepare_cross_gain_basis(
         self,
         W_target,
         W_neighbour,
@@ -707,10 +791,10 @@ class _CrossSpatialProgramBase:
         Pu,
         samples,
         weights,
-        contrast,
         n_components,
         tol,
     ):
+        """Cache expression bases shared by cross-program spatial permutations."""
         target_row_scale = _cross_row_scale(samples, weights, "target")
         neighbour_row_scale = _cross_row_scale(samples, weights, "neighbour")
         rank_target = max(self.expression_rank, int(n_components) + 2)
@@ -731,33 +815,78 @@ class _CrossSpatialProgramBase:
             dtype=self.dtype,
             tol=tol,
         )
-        dt = st / np.sqrt(np.square(st) + self.gain_ridge)
-        du = su / np.sqrt(np.square(su) + self.gain_ridge)
-        K_contrast = sp.block_diag(
-            [
-                float(coefficient) * sample.K
-                for sample, coefficient in zip(samples, contrast)
-            ],
-            format="csr",
-        )
-        H = dt[:, None] * (Ut.T @ (K_contrast @ Uu)) * du[None, :]
-        left, singular, right_t = svd(H, full_matrices=False)
-        k = min(int(n_components), len(singular))
-        left, singular, right_t = left[:, :k], singular[:k], right_t[:k]
         denom_target = np.sqrt(np.square(st) + self.gain_ridge)
         denom_neighbour = np.sqrt(np.square(su) + self.gain_ridge)
-        target_loadings = Vtt.T @ (
-            (1.0 / np.maximum(denom_target, 1e-12))[:, None] * left
+        cache = {
+            "Ut": Ut,
+            "st": st,
+            "Vtt": Vtt,
+            "Uu": Uu,
+            "su": su,
+            "Vtu": Vtu,
+            "dt": np.divide(st, denom_target, out=np.zeros_like(st), where=denom_target > 0),
+            "du": np.divide(su, denom_neighbour, out=np.zeros_like(su), where=denom_neighbour > 0),
+            "denom_target": denom_target,
+            "denom_neighbour": denom_neighbour,
+        }
+        self._cross_gain_basis_ = cache
+        return cache
+
+    @staticmethod
+    def _cross_gain_solve(cache, kernels, contrast, n_components):
+        K_contrast = sp.block_diag(
+            [float(coefficient) * K for K, coefficient in zip(kernels, contrast)],
+            format="csr",
         )
-        neighbour_loadings = Vtu.T @ (
-            (1.0 / np.maximum(denom_neighbour, 1e-12))[:, None] * right_t.T
+        H = (
+            cache["dt"][:, None]
+            * (cache["Ut"].T @ (K_contrast @ cache["Uu"]))
+            * cache["du"][None, :]
+        )
+        left, singular, right_t = svd(H, full_matrices=False)
+        k = min(int(n_components), len(singular))
+        return left[:, :k], singular[:k], right_t[:k]
+
+    def _fit_gain(
+        self,
+        W_target,
+        W_neighbour,
+        Pt,
+        Pu,
+        samples,
+        weights,
+        contrast,
+        n_components,
+        tol,
+    ):
+        cache = self._prepare_cross_gain_basis(
+            W_target,
+            W_neighbour,
+            Pt,
+            Pu,
+            samples,
+            weights,
+            n_components,
+            tol,
+        )
+        left, singular, right_t = self._cross_gain_solve(
+            cache,
+            [sample.K for sample in samples],
+            contrast,
+            n_components,
+        )
+        target_loadings = cache["Vtt"].T @ (
+            (1.0 / np.maximum(cache["denom_target"], 1e-12))[:, None] * left
+        )
+        neighbour_loadings = cache["Vtu"].T @ (
+            (1.0 / np.maximum(cache["denom_neighbour"], 1e-12))[:, None] * right_t.T
         )
         self.singular_values = singular
         self.target_loadings, self.neighbour_loadings = _orient_cross_pairs(
             target_loadings, neighbour_loadings
         )
-        self.target_expression_singular_values_ = st
-        self.neighbour_expression_singular_values_ = su
+        self.target_expression_singular_values_ = cache["st"]
+        self.neighbour_expression_singular_values_ = cache["su"]
 
     def _sample_mode_covariance(self):
         values = []
@@ -767,6 +896,88 @@ class _CrossSpatialProgramBase:
             spatial_neighbour = sample.K @ neighbour_modes
             values.append(np.sum(target_modes * spatial_neighbour, axis=0))
         return np.vstack(values)
+
+    def truncate_modes(self, n_modes):
+        n_modes = int(n_modes)
+        if n_modes < 0 or n_modes > len(self.singular_values):
+            raise ValueError("n_modes is outside the fitted mode range")
+        self.singular_values = self.singular_values[:n_modes]
+        self.target_loadings = self.target_loadings[:, :n_modes]
+        self.neighbour_loadings = self.neighbour_loadings[:, :n_modes]
+        if isinstance(self.target_modes, list):
+            self.target_modes = [mode[:, :n_modes] for mode in self.target_modes]
+            self.neighbour_modes = [mode[:, :n_modes] for mode in self.neighbour_modes]
+        else:
+            self.target_modes = self.target_modes[:, :n_modes]
+            self.neighbour_modes = self.neighbour_modes[:, :n_modes]
+        for name in (
+            "sample_mode_covariance_",
+            "sample_mode_statistic_",
+        ):
+            if hasattr(self, name):
+                setattr(self, name, getattr(self, name)[:, :n_modes])
+        for name in (
+            "aggregate_mode_statistic_",
+            "contrast_mode_statistic_",
+            "group_a_mode_statistic_",
+            "group_b_mode_statistic_",
+            "permutation_pvalues_",
+        ):
+            if hasattr(self, name):
+                setattr(self, name, getattr(self, name)[:n_modes])
+        self.selected_modes_ = n_modes
+        return self
+
+    def permutation_test(self, n_permutations=100, seed=0, tol=0):
+        """Random-label max-singular-value test for non-differential cross programs."""
+        n_permutations = int(n_permutations)
+        if n_permutations <= 0:
+            self.permutation_pvalues_ = np.full(len(self.singular_values), np.nan)
+            self.permutation_max_singular_values_ = np.empty(0)
+            return self.permutation_pvalues_
+        rng = np.random.default_rng(seed)
+        k = len(self.singular_values)
+        null = np.empty(n_permutations, dtype=float)
+        for b in range(n_permutations):
+            samples = _permuted_cross_samples(self.samples, rng)
+            if self.objective == "gain":
+                _, singular, _ = self._cross_gain_solve(
+                    self._cross_gain_basis_,
+                    [sample.K for sample in samples],
+                    np.ones(len(samples), dtype=float),
+                    k,
+                )
+                null[b] = float(singular[0])
+                continue
+            tmp = _CrossSpatialProgramBase(
+                self.radius,
+                objective=self.objective,
+                sample_weighting=self.sample_weighting,
+                expression_rank=self.expression_rank,
+                gain_ridge=self.gain_ridge,
+                graph_normalisation=self.graph_normalisation,
+                geometry_normalisation=self.geometry_normalisation,
+                distance_bins=self.distance_bins,
+                covariates_tol=self.covariates_tol,
+                block_size=self.block_size,
+                dtype=self.dtype,
+                verbose=False,
+            )
+            tmp._fit_prepared(samples, k, tol=tol)
+            null[b] = float(tmp.singular_values[0])
+        selection = select_modes(self.singular_values, null, alpha=0.05)
+        self.permutation_max_singular_values_ = null
+        self.permutation_pvalues_ = selection.pvalues
+        return self.permutation_pvalues_
+
+    def select_modes(self, alpha=0.05):
+        if not hasattr(self, "permutation_max_singular_values_"):
+            raise RuntimeError("Run permutation_test before select_modes")
+        selection = select_modes(
+            self.singular_values, self.permutation_max_singular_values_, alpha=alpha
+        )
+        self.mode_selection_ = selection
+        return selection
 
 
 class SharedCrossSpatialProgramModel(_CrossSpatialProgramBase):
@@ -884,6 +1095,15 @@ class DifferentialCrossSpatialProgramModel(_CrossSpatialProgramBase):
         null = np.empty(n_permutations, dtype=float)
         for b in range(n_permutations):
             contrast = _permuted_group_contrast(rng, n, n_positive)
+            if self.objective == "gain":
+                _, singular, _ = self._cross_gain_solve(
+                    self._cross_gain_basis_,
+                    [sample.K for sample in self.samples],
+                    contrast,
+                    k,
+                )
+                null[b] = float(singular[0])
+                continue
             tmp = _CrossSpatialProgramBase(
                 self.radius,
                 objective=self.objective,
@@ -951,7 +1171,7 @@ class CrossSpatialProgramModel(_CrossSpatialProgramBase):
 
 
 class LabelDecompositionModel:
-    """Exact decomposition of a sample-centred spatial statistic by label structure.
+    """Exact decomposition of sample-centred spatial covariance by label structure.
 
     Let Y be the commonly sample-centered/covariate-residualized expression,
     W the within-label residual, and B = Y - W the between-label mean component.
@@ -969,35 +1189,22 @@ class LabelDecompositionModel:
         self,
         radius,
         graph_normalisation="symmetric",
-        spatial_statistic="mark_correlation",
         geometry_normalisation="distance",
         distance_bins=10,
-        null_center=False,
         covariates_tol=1e-10,
         dtype=np.float64,
         verbose=False,
     ):
-        if spatial_statistic not in VALID_SPATIAL_STATISTICS:
-            raise ValueError(
-                f"spatial_statistic must be one of {sorted(VALID_SPATIAL_STATISTICS)}"
-            )
         if geometry_normalisation not in VALID_GEOMETRY_NORMALISATIONS:
             raise ValueError(
-                "geometry_normalisation must be one of "
-                f"{sorted(VALID_GEOMETRY_NORMALISATIONS)}"
+                "geometry_normalisation must be one of " f"{sorted(VALID_GEOMETRY_NORMALISATIONS)}"
             )
         if int(distance_bins) < 1:
             raise ValueError("distance_bins must be positive")
-        if null_center and spatial_statistic != "mark_correlation":
-            raise ValueError(
-                "null_center is only defined for spatial_statistic='mark_correlation'"
-            )
         self.radius = float(radius)
         self.graph_normalisation = graph_normalisation
-        self.spatial_statistic = spatial_statistic
         self.geometry_normalisation = geometry_normalisation
         self.distance_bins = int(distance_bins)
-        self.null_center = bool(null_center)
         self.covariates_tol = covariates_tol
         self.dtype = np.dtype(dtype)
         self.verbose = verbose
@@ -1011,7 +1218,6 @@ class LabelDecompositionModel:
             covariates=covariates,
             dtype=self.dtype,
             graph_normalisation=self.graph_normalisation,
-            spatial_statistic=self.spatial_statistic,
             geometry_normalisation=self.geometry_normalisation,
             distance_bins=self.distance_bins,
         )
@@ -1020,7 +1226,7 @@ class LabelDecompositionModel:
         self.samples = samples
         sample = samples[0]
         self.geometry_diagnostics_ = [sample.geometry_diagnostics]
-        K = _sample_statistic_kernel(sample, null_center=self.null_center)
+        K = sample.K
         base_projector = SpotProjector(
             sample.n_spots,
             groups=Groups.single(sample.n_spots),
@@ -1069,7 +1275,7 @@ class LabelDecompositionModel:
     def operator_additivity_error(self, vectors=None):
         """Numerically verify total = between + within + coupling."""
         sample = self.samples[0]
-        K = _sample_statistic_kernel(sample, null_center=self.null_center)
+        K = sample.K
         base = SpotProjector(
             sample.n_spots,
             groups=Groups.single(sample.n_spots),
@@ -1093,10 +1299,3 @@ class LabelDecompositionModel:
         )
         denom = max(np.linalg.norm(total_op.apply(vectors)), 1e-12)
         return float(np.linalg.norm(residual) / denom)
-
-
-# Backwards-compatible class names for downstream imports. Their semantics now use
-# zero-diagonal spatial covariance and explicit objectives rather than alpha scaling.
-SpatialGeneKPCA = SpatialProgramModel
-SpatialGeneSampleCombinedKPCA = SharedSpatialProgramModel
-SpatialGeneSampleContrastKPCA = DifferentialSpatialProgramModel

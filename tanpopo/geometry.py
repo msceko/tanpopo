@@ -8,7 +8,6 @@ from scipy.spatial import cKDTree
 
 
 VALID_GEOMETRY_NORMALISATIONS = {"none", "mass", "distance"}
-VALID_SPATIAL_STATISTICS = {"mark_correlation", "variogram"}
 
 
 def neighbour_spacing(coords):
@@ -255,17 +254,11 @@ def standardise_pair_measures(
     """
     if geometry_normalisation not in VALID_GEOMETRY_NORMALISATIONS:
         raise ValueError(
-            "geometry_normalisation must be one of "
-            f"{sorted(VALID_GEOMETRY_NORMALISATIONS)}"
+            "geometry_normalisation must be one of " f"{sorted(VALID_GEOMETRY_NORMALISATIONS)}"
         )
     if not adjacencies:
         raise ValueError("At least one pair adjacency is required")
-    if not (
-        len(adjacencies)
-        == len(row_coords)
-        == len(col_coords)
-        == len(target_masses)
-    ):
+    if not (len(adjacencies) == len(row_coords) == len(col_coords) == len(target_masses)):
         raise ValueError("Pair adjacencies, coordinates and target masses must align")
 
     row_coords = [np.asarray(xy, dtype=float) for xy in row_coords]
@@ -355,37 +348,21 @@ def standardise_pair_measures(
     return outputs, diagnostics
 
 
-def adjacency_to_variogram(K):
-    """Convert a symmetric pair-weight adjacency to its graph Laplacian.
-
-    For residual expression Y,
-
-        Y.T @ (D - K) @ Y
-
-    equals ``1/2 sum_ij K_ij (Y_i-Y_j)(Y_i-Y_j).T``. Thus, after pair-mass
-    normalisation, the operator estimates a matrix-valued mark variogram under
-    exactly the same pair measure as the mark-correlation statistic.
-    """
-    K = K.tocsr()
-    degree = np.asarray(K.sum(axis=1)).ravel()
-    return (sp.diags(degree, format="csr") - K).tocsr()
-
-
-def spatial_statistic_kernels(
+def spatial_covariance_kernels(
     coords,
     radius,
     *,
-    spatial_statistic="mark_correlation",
     geometry_normalisation="distance",
     distance_bins=10,
     graph_normalisation="symmetric",
     dtype=np.float64,
 ):
-    """Build comparable square spatial operators for one or more samples."""
-    if spatial_statistic not in VALID_SPATIAL_STATISTICS:
-        raise ValueError(
-            f"spatial_statistic must be one of {sorted(VALID_SPATIAL_STATISTICS)}"
-        )
+    """Build comparable zero-diagonal spatial pair-covariance kernels.
+
+    Geometry standardisation is applied before expression enters the model.
+    ``distance`` forces all biological samples to share one weighted pair-distance
+    profile; ``mass`` fixes only total pair mass; ``none`` preserves graph scale.
+    """
     coords = [np.asarray(xy, dtype=dtype) for xy in coords]
     if not coords:
         raise ValueError("At least one coordinate matrix is required")
@@ -410,17 +387,11 @@ def spatial_statistic_kernels(
         distance_bins=distance_bins,
     )
     for diag in diagnostics:
-        diag["spatial_statistic"] = spatial_statistic
-
-    if spatial_statistic == "variogram":
-        operators = [
-            adjacency_to_variogram(K).astype(dtype, copy=False) for K in adjacency
-        ]
-        return operators, diagnostics
+        diag["statistic"] = "spatial_covariance"
     return [K.astype(dtype, copy=False) for K in adjacency], diagnostics
 
 
-def cross_mark_correlation_kernels(
+def cross_covariance_kernels(
     target_coords,
     neighbour_coords,
     radius,
@@ -432,7 +403,7 @@ def cross_mark_correlation_kernels(
     graph_normalisation="symmetric",
     dtype=np.float64,
 ):
-    """Build geometry-standardised bipartite target-neighbour pair kernels.
+    """Build geometry-standardised bipartite target-neighbour covariance kernels.
 
     Biological self-pairs are removed using original observation IDs before
     row/column degree normalisation. The geometry target mass for sample ``s`` is
@@ -490,7 +461,7 @@ def cross_mark_correlation_kernels(
     ):
         diag.update(
             {
-                "spatial_statistic": "mark_correlation",
+                "statistic": "cross_covariance",
                 "n_target": int(len(target_xy)),
                 "n_neighbour": int(len(neighbour_xy)),
                 "removed_identity_pairs": int(removed),

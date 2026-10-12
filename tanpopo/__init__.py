@@ -6,9 +6,6 @@ from tanpopo.models import (
     SharedCrossSpatialProgramModel,
     SharedSpatialProgramModel,
     SpatialProgramModel,
-    SpatialGeneKPCA,
-    SpatialGeneSampleCombinedKPCA,
-    SpatialGeneSampleContrastKPCA,
 )
 
 __all__ = [
@@ -19,9 +16,24 @@ __all__ = [
     "DifferentialSpatialProgramModel",
     "LabelDecompositionModel",
     "CrossSpatialProgramModel",
-    "SpatialGeneKPCA",
-    "SpatialGeneSampleCombinedKPCA",
-    "SpatialGeneSampleContrastKPCA",
 ]
 
-__version__ = "0.2.0"
+from tanpopo.version import __version__
+
+from tanpopo.diagnostics import (
+    SpatialInformationCurveResult,
+    SpatialInformationResult,
+    spatial_information_curve_from_arrays,
+    spatial_information_from_arrays,
+)
+from tanpopo.results import CrossProgramResult, ProgramResult, load_result
+
+__all__ += [
+    "SpatialInformationResult",
+    "SpatialInformationCurveResult",
+    "spatial_information_from_arrays",
+    "spatial_information_curve_from_arrays",
+    "ProgramResult",
+    "CrossProgramResult",
+    "load_result",
+]

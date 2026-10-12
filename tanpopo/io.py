@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-import json
-
 import numpy as np
 
 from tanpopo.data import preprocess_anndata, preprocess_anndata_shared_genes
+from tanpopo.results import register_cross_result, register_program_result
 from tanpopo.utils import as_value, timed
 
 
-def _scanpy():
+def _anndata():
     try:
-        import scanpy as sc
+        import anndata as ad
     except ImportError as exc:
-        raise ImportError("AnnData workflows require scanpy and anndata") from exc
-    return sc
+        raise ImportError("AnnData workflows require anndata") from exc
+    return ad
 
 
 def name_samples(fnames, sample_names):
@@ -27,17 +26,17 @@ def name_samples(fnames, sample_names):
 
 
 def load_preprocess_sample(fname, verbose=False, **kwargs):
-    sc = _scanpy()
+    ad = _anndata()
     with timed("Loading data", verbose):
-        adata = sc.read_h5ad(fname)
+        adata = ad.read_h5ad(fname)
         preprocess_anndata(adata, **kwargs)
     return adata
 
 
 def load_preprocess_samples(fnames, sample_names=None, verbose=False, **kwargs):
-    sc = _scanpy()
+    ad = _anndata()
     with timed("Loading data", verbose):
-        adatas = [sc.read_h5ad(fname) for fname in fnames]
+        adatas = [ad.read_h5ad(fname) for fname in fnames]
         preprocess_anndata_shared_genes(adatas, **kwargs)
         sample_names = name_samples(fnames, sample_names)
     return adatas, sample_names
@@ -77,24 +76,33 @@ def model_cfg(model):
         "expression_rank",
         "gain_ridge",
         "graph_normalisation",
-        "spatial_statistic",
         "geometry_normalisation",
         "distance_bins",
-        "null_center",
     )
     return {key: getattr(model, key) for key in keys if hasattr(model, key)}
 
 
-def add_metadata(adata, cmd_id, preprocessing, model, extra=None):
-    adata.uns.setdefault("tanpopo", {}).setdefault(cmd_id, {})
-    metadata = {
-        "preprocessing": preprocessing,
-        "model": model,
-        "tanpopo_scope": "conditional_spatial_pair_statistics",
-    }
+def add_metadata(
+    adata,
+    analysis_id,
+    preprocessing,
+    model,
+    extra=None,
+    *,
+    variant="default",
+    analysis_type=None,
+):
+    """Attach stable metadata to a stored analysis result."""
+    record = adata.uns.setdefault("tanpopo", {}).setdefault(str(analysis_id), {})
+    if analysis_type is not None:
+        record["analysis_type"] = str(analysis_type)
+    record["preprocessing"] = preprocessing
+    record["scope"] = "geometry_standardised_spatial_covariance"
+    variant_metadata = record.setdefault("result_metadata", {}).setdefault(str(variant), {})
+    variant_metadata["model"] = model
     if extra:
-        metadata.update(extra)
-    adata.uns["tanpopo"][cmd_id].update(metadata)
+        variant_metadata.update(extra)
+    return record
 
 
 def full_mode(mode, obs_idx, n_obs):
@@ -103,15 +111,8 @@ def full_mode(mode, obs_idx, n_obs):
     return out
 
 
-def _store_gene_spatial_statistic(adata, prefix, model):
-    values = model.gene_spatial_scores()
-    adata.var[f"{prefix}_gene_spatial_statistic"] = values
-    # Retain the historical covariance key for mark correlation and provide an
-    # explicit variogram key for the alternative pair statistic.
-    if getattr(model, "spatial_statistic", "mark_correlation") == "mark_correlation":
-        adata.var[f"{prefix}_gene_spatial_covariance"] = values
-    else:
-        adata.var[f"{prefix}_gene_mark_variogram"] = values
+def _store_gene_spatial_covariance(adata, prefix, model):
+    adata.var[f"{prefix}_gene_spatial_covariance"] = model.gene_spatial_scores()
 
 
 def geometry_diagnostics_cfg(model, sample_names=None):
@@ -124,28 +125,36 @@ def geometry_diagnostics_cfg(model, sample_names=None):
     return {str(name): diag for name, diag in zip(sample_names, diagnostics)}
 
 
-def store_sample_result(adata, model, cmd_id, key="", sample_index=0):
-    prefix = f"tanpopo_{cmd_id}{key}"
+def store_sample_result(adata, model, analysis_id, key="", sample_index=0):
+    prefix = f"tanpopo_{analysis_id}{key}"
+    variant = "default" if not key else key.lstrip("_")
     sample = model.samples[sample_index]
-    adata.obsm[f"{prefix}_spot_modes"] = full_mode(
-        model.spot_modes[sample_index], sample.obs_idx, adata.n_obs
+    modes_key = f"{prefix}_spot_modes"
+    loadings_key = f"{prefix}_gene_loadings"
+    scores_key = f"{prefix}_gene_scores"
+    covariance_key = f"{prefix}_gene_spatial_covariance"
+    adata.obsm[modes_key] = full_mode(model.spot_modes[sample_index], sample.obs_idx, adata.n_obs)
+    adata.varm[loadings_key] = model.gene_loadings
+    adata.varm[scores_key] = model.gene_scores
+    _store_gene_spatial_covariance(adata, prefix, model)
+    register_program_result(
+        adata,
+        analysis_id,
+        loadings_key=loadings_key,
+        modes_key=modes_key,
+        gene_scores_key=scores_key,
+        gene_covariance_key=covariance_key,
+        values=model.eigenvalues,
+        variant=variant,
+        analysis_type="program",
     )
-    adata.varm[f"{prefix}_gene_loadings"] = model.gene_loadings
-    adata.varm[f"{prefix}_gene_scores"] = model.gene_scores
-    # Keep historical eigenvector key where dimensions permit; gene_loadings is the
-    # scientifically interpretable key for all objectives.
-    if model.eigenvectors.shape[0] == adata.n_vars:
-        adata.varm[f"{prefix}_eigenvectors"] = model.eigenvectors
-    _store_gene_spatial_statistic(adata, prefix, model)
-    adata.uns.setdefault("tanpopo", {}).setdefault(cmd_id, {})
-    adata.uns["tanpopo"][cmd_id][f"eigenvalues{key}"] = np.asarray(model.eigenvalues)
 
 
 def concat_adata_samples(adatas, sample_names):
-    sc = _scanpy()
+    ad = _anndata()
     if len(adatas) == 1:
         return adatas[0].copy()
-    return sc.concat(
+    return ad.concat(
         adatas,
         label="sample",
         keys=[str(x) for x in sample_names],
@@ -155,27 +164,41 @@ def concat_adata_samples(adatas, sample_names):
     )
 
 
-def store_multi_sample_result(adatas, sample_names, model, cmd_id, key=""):
-    prefix = f"tanpopo_{cmd_id}{key}"
+def store_multi_sample_result(adatas, sample_names, model, analysis_id, key=""):
+    prefix = f"tanpopo_{analysis_id}{key}"
+    variant = "default" if not key else key.lstrip("_")
+    modes_key = f"{prefix}_spot_modes"
+    loadings_key = f"{prefix}_gene_loadings"
+    scores_key = f"{prefix}_gene_scores"
+    covariance_key = f"{prefix}_gene_spatial_covariance"
     for i, adata in enumerate(adatas):
-        adata.obsm[f"{prefix}_spot_modes"] = full_mode(
+        adata.obsm[modes_key] = full_mode(
             model.spot_modes[i], model.samples[i].obs_idx, adata.n_obs
         )
     combined = concat_adata_samples(adatas, sample_names)
-    combined.varm[f"{prefix}_gene_loadings"] = model.gene_loadings
-    combined.varm[f"{prefix}_gene_scores"] = model.gene_scores
-    _store_gene_spatial_statistic(combined, prefix, model)
-    combined.uns.setdefault("tanpopo", {}).setdefault(cmd_id, {})
-    combined.uns["tanpopo"][cmd_id][f"eigenvalues{key}"] = np.asarray(model.eigenvalues)
-    combined.uns["tanpopo"][cmd_id][f"sample_coefficients{key}"] = np.asarray(
-        model.sample_coefficients_
+    combined.varm[loadings_key] = model.gene_loadings
+    combined.varm[scores_key] = model.gene_scores
+    _store_gene_spatial_covariance(combined, prefix, model)
+    record = register_program_result(
+        combined,
+        analysis_id,
+        loadings_key=loadings_key,
+        modes_key=modes_key,
+        gene_scores_key=scores_key,
+        gene_covariance_key=covariance_key,
+        values=model.eigenvalues,
+        variant=variant,
+        analysis_type="program",
+    )
+    record.setdefault("result_metadata", {}).setdefault(variant, {})["sample_coefficients"] = (
+        np.asarray(model.sample_coefficients_)
     )
     return combined
 
 
-def store_multi_sample_cross_result(adatas, sample_names, model, cmd_id):
+def store_multi_sample_cross_result(adatas, sample_names, model, analysis_id):
     """Store shared or differential cross-program results across samples."""
-    prefix = f"tanpopo_{cmd_id}"
+    prefix = f"tanpopo_{analysis_id}"
     for adata, sample, target_modes, neighbour_modes in zip(
         adatas, model.samples, model.target_modes, model.neighbour_modes
     ):
@@ -189,33 +212,37 @@ def store_multi_sample_cross_result(adatas, sample_names, model, cmd_id):
     combined = concat_adata_samples(adatas, sample_names)
     combined.varm[f"{prefix}_target_loadings"] = model.target_loadings
     combined.varm[f"{prefix}_neighbour_loadings"] = model.neighbour_loadings
-    result = combined.uns.setdefault("tanpopo", {}).setdefault(cmd_id, {})
-    result["singular_values"] = np.asarray(model.singular_values)
-    result["sample_coefficients"] = np.asarray(model.sample_coefficients_)
+    record = register_cross_result(
+        combined,
+        analysis_id=analysis_id,
+        target_loadings_key=f"{prefix}_target_loadings",
+        neighbour_loadings_key=f"{prefix}_neighbour_loadings",
+        target_modes_key=f"{prefix}_target_modes",
+        neighbour_modes_key=f"{prefix}_neighbour_modes",
+        singular_values=model.singular_values,
+        analysis_type="cross",
+    )
+    metadata = record.setdefault("result_metadata", {}).setdefault("default", {})
+    metadata["sample_coefficients"] = np.asarray(model.sample_coefficients_)
     if hasattr(model, "base_sample_weights_"):
-        result["base_sample_weights"] = np.asarray(model.base_sample_weights_)
+        metadata["base_sample_weights"] = np.asarray(model.base_sample_weights_)
     if hasattr(model, "contrast_coefficients_"):
-        result["contrast_coefficients"] = np.asarray(model.contrast_coefficients_)
-    result["sample_mode_covariance"] = np.asarray(model.sample_mode_covariance_)
-    if hasattr(model, "sample_mode_statistic_"):
-        result["sample_mode_statistic"] = np.asarray(model.sample_mode_statistic_)
-    if hasattr(model, "aggregate_mode_statistic_"):
-        result["aggregate_mode_statistic"] = np.asarray(model.aggregate_mode_statistic_)
-    if hasattr(model, "contrast_mode_statistic_"):
-        result["contrast_mode_statistic"] = np.asarray(model.contrast_mode_statistic_)
-    if hasattr(model, "group_a_mode_statistic_"):
-        result["group_a_mode_statistic"] = np.asarray(model.group_a_mode_statistic_)
-    if hasattr(model, "group_b_mode_statistic_"):
-        result["group_b_mode_statistic"] = np.asarray(model.group_b_mode_statistic_)
+        metadata["contrast_coefficients"] = np.asarray(model.contrast_coefficients_)
+    metadata["sample_mode_covariance"] = np.asarray(model.sample_mode_covariance_)
+    for attr, key in (
+        ("sample_mode_statistic_", "sample_mode_statistic"),
+        ("aggregate_mode_statistic_", "aggregate_mode_statistic"),
+        ("contrast_mode_statistic_", "contrast_mode_statistic"),
+        ("group_a_mode_statistic_", "group_a_mode_statistic"),
+        ("group_b_mode_statistic_", "group_b_mode_statistic"),
+    ):
+        if hasattr(model, attr):
+            metadata[key] = np.asarray(getattr(model, attr))
     return combined
 
 
-# Backward-compatible internal alias.
-store_shared_cross_result = store_multi_sample_cross_result
-
-
-def store_cross_result(adata, model, cmd_id):
-    prefix = f"tanpopo_{cmd_id}"
+def store_cross_result(adata, model, analysis_id):
+    prefix = f"tanpopo_{analysis_id}"
     target = np.full((adata.n_obs, model.target_modes.shape[1]), np.nan)
     neighbour = np.full((adata.n_obs, model.neighbour_modes.shape[1]), np.nan)
     target[model.target_idx] = model.target_modes
@@ -224,5 +251,13 @@ def store_cross_result(adata, model, cmd_id):
     adata.obsm[f"{prefix}_neighbour_modes"] = neighbour
     adata.varm[f"{prefix}_target_loadings"] = model.target_loadings
     adata.varm[f"{prefix}_neighbour_loadings"] = model.neighbour_loadings
-    adata.uns.setdefault("tanpopo", {}).setdefault(cmd_id, {})
-    adata.uns["tanpopo"][cmd_id]["singular_values"] = np.asarray(model.singular_values)
+    register_cross_result(
+        adata,
+        analysis_id=analysis_id,
+        target_loadings_key=f"{prefix}_target_loadings",
+        neighbour_loadings_key=f"{prefix}_neighbour_loadings",
+        target_modes_key=f"{prefix}_target_modes",
+        neighbour_modes_key=f"{prefix}_neighbour_modes",
+        singular_values=model.singular_values,
+        analysis_type="cross",
+    )

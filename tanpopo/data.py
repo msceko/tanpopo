@@ -7,7 +7,7 @@ import numpy as np
 import scipy.sparse as sp
 
 from tanpopo.covariates import compute_covariates
-from tanpopo.kernel import cross_mark_correlation_kernels, spatial_statistic_kernels
+from tanpopo.geometry import cross_covariance_kernels, spatial_covariance_kernels
 from tanpopo.utils import as_list, get_counts_matrix, none_to_list, pd_dtype
 
 
@@ -279,7 +279,6 @@ def prepare_sample(
     mask=None,
     dtype=np.float64,
     graph_normalisation="symmetric",
-    spatial_statistic="mark_correlation",
     geometry_normalisation="distance",
     distance_bins=10,
 ):
@@ -293,7 +292,6 @@ def prepare_sample(
         masks=None if mask is None else [mask],
         dtype=dtype,
         graph_normalisation=graph_normalisation,
-        spatial_statistic=spatial_statistic,
         geometry_normalisation=geometry_normalisation,
         distance_bins=distance_bins,
     )[0]
@@ -308,7 +306,6 @@ def prepare_samples(
     masks=None,
     dtype=np.float64,
     graph_normalisation="symmetric",
-    spatial_statistic="mark_correlation",
     geometry_normalisation="distance",
     distance_bins=10,
 ):
@@ -331,10 +328,9 @@ def prepare_samples(
         for w, xy, lab, cov, mask in zip(W, coords, labels, covariates, masks)
     ]
     coords_sub = [item[1] for item in prepared]
-    kernels, diagnostics = spatial_statistic_kernels(
+    kernels, diagnostics = spatial_covariance_kernels(
         coords_sub,
         radius,
-        spatial_statistic=spatial_statistic,
         geometry_normalisation=geometry_normalisation,
         distance_bins=distance_bins,
         graph_normalisation=graph_normalisation,
@@ -350,10 +346,9 @@ def prepare_samples(
             cov,
             geometry_diagnostics=diag,
         )
-        for (W_sub, _, inv, spot_idx, groups, cov), K, diag in zip(
-            prepared, kernels, diagnostics
-        )
+        for (W_sub, _, inv, spot_idx, groups, cov), K, diag in zip(prepared, kernels, diagnostics)
     ]
+
 
 def _prepare_cross_sample_arrays(
     W,
@@ -464,7 +459,7 @@ def prepare_cross_samples(
     neighbour_coords = [item[3] for item in prepared]
     target_ids = [item[4] for item in prepared]
     neighbour_ids = [item[5] for item in prepared]
-    kernels, diagnostics = cross_mark_correlation_kernels(
+    kernels, diagnostics = cross_covariance_kernels(
         target_coords,
         neighbour_coords,
         radius,
@@ -498,6 +493,7 @@ def prepare_cross_samples(
             cov_neighbour,
         ), K, diag in zip(prepared, kernels, diagnostics)
     ]
+
 
 def _stack_cross_covariates(samples, side):
     attr = f"covariates_{side}"
@@ -555,9 +551,7 @@ def concatenate_samples(samples):
         label_offsets.extend((off + s.labels_groups.offsets).tolist())
         label_lengths.extend(s.labels_groups.lengths.tolist())
         if has_cov:
-            covs.append(
-                np.zeros((s.n_spots, n_cov)) if s.covariates is None else s.covariates
-            )
+            covs.append(np.zeros((s.n_spots, n_cov)) if s.covariates is None else s.covariates)
     label_groups = Groups(np.asarray(label_offsets), np.asarray(label_lengths))
     covariates = None if not has_cov else np.vstack(covs)
     return W, K, sample_groups, label_groups, covariates

@@ -11,11 +11,7 @@ from tanpopo.projection import SpotProjector
 
 
 class ProjectedKernel:
-    """Projected spatial operator S = P^T K P.
-
-    ``K`` is zero-diagonal for mark correlation and a graph Laplacian for the
-    variogram statistic.
-    """
+    """Projected zero-self-edge spatial covariance operator ``S = P^T K P``."""
 
     def __init__(self, K, projector, dtype=np.float64):
         self.K = K.tocsr().astype(dtype, copy=False)
@@ -80,7 +76,7 @@ def gene_expression_variance(W, projector, block_size=256, eps=0.0):
     return np.maximum(diag, eps)
 
 
-def gene_spatial_statistic_diag(W, S, block_size=256):
+def gene_spatial_covariance_diag(W, S, block_size=256):
     """diag(W^T P^T K P W), without clipping negative values."""
     W = W.tocsr() if sp.issparse(W) else sp.csr_matrix(W)
     if block_size is None:
@@ -94,22 +90,16 @@ def gene_spatial_statistic_diag(W, S, block_size=256):
     return diag
 
 
-
-# Backward-compatible internal name used by older callers.
-gene_spatial_covariance_diag = gene_spatial_statistic_diag
-
 def expression_scale_from_variance(variance, eps=1e-12):
     variance = np.asarray(variance, dtype=float)
     return np.maximum(variance, eps) ** -0.5
 
 
 class GeneKernel:
-    """Gene-space projected spatial-statistic operator.
+    """Gene-space projected spatial covariance operator.
 
-    With ``gene_scale=None`` this is G = W^T P^T K P W, where K is either the
-    mark-correlation adjacency or the mark-variogram Laplacian. With a positive
-    expression-derived scale D^-1/2 it is the gene-standardized form
-    D^-1/2 G D^-1/2.
+    With ``gene_scale=None`` this is ``G = W^T P^T K P W``. With a positive
+    expression-derived scale it is the gene-standardized form.
     """
 
     def __init__(self, W, S, gene_scale=None, dtype=np.float64):
@@ -252,7 +242,9 @@ class CrossGeneOperator(LinearOperator):
         self.Pt = projector_target
         self.Pu = projector_neighbour
         self.scale_t = None if scale_target is None else np.asarray(scale_target, dtype=dtype)
-        self.scale_u = None if scale_neighbour is None else np.asarray(scale_neighbour, dtype=dtype)
+        self.scale_u = (
+            None if scale_neighbour is None else np.asarray(scale_neighbour, dtype=dtype)
+        )
         self.dtype = np.dtype(dtype)
         super().__init__(dtype=self.dtype, shape=(self.Wt.shape[1], self.Wu.shape[1]))
 

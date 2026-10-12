@@ -1,6 +1,6 @@
 import numpy as np
 
-from tanpopo.kernel import kernel_matrix_sparse
+from tanpopo.geometry import kernel_matrix_sparse
 
 
 def test_square_kernel_is_zero_diagonal_and_symmetric():

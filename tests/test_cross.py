@@ -1,7 +1,7 @@
 import numpy as np
 
 from tanpopo.data import prepare_cross_sample, prepare_cross_samples, prepare_sample
-from tanpopo.kernel import kernel_matrix_sparse
+from tanpopo.geometry import kernel_matrix_sparse
 from tanpopo.models import (
     CrossSpatialProgramModel,
     DifferentialCrossSpatialProgramModel,
@@ -261,7 +261,6 @@ def test_identical_cross_masks_match_square_pair_adjacency():
         coords,
         0.4,
         geometry_normalisation="none",
-        spatial_statistic="mark_correlation",
     )
     np.testing.assert_allclose(cross.K.toarray(), square.K.toarray(), rtol=1e-14, atol=1e-15)
     assert cross.geometry_diagnostics["removed_identity_pairs"] == n
